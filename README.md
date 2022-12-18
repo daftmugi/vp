@@ -1,6 +1,6 @@
 # VP.rb
 
-**VP.rb** is a VP (**V**olition **P**ackage) packer/unpacker for FreeSpace.
+**VP.rb** is a command-line VP (**V**olition **P**ackage) packer/unpacker for FreeSpace.
 
 See [*.VP on the FreeSpace Wiki](https://wiki.hard-light.net/index.php/*.VP).
 
