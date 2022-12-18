@@ -162,10 +162,10 @@ class VP
     <<~EOS
     #{cmd} version #{VERSION}
 
-    Usage: #{cmd} -l [-L] [-v | -vv] VP_FILE [REGEX]
-           #{cmd} -x [-L] [-n] VP_FILE [REGEX] -d DIR
-           #{cmd} -p [-L] VP_FILE [REGEX]
-           #{cmd} -c [-L] [-n] [-v | -vv] VP_FILE -d DIR
+    Usage: #{cmd} -l VP_FILE [REGEX]        [-L]      [-v | -vv]
+           #{cmd} -x VP_FILE [REGEX] -d DIR [-L] [-n]
+           #{cmd} -p VP_FILE [REGEX]        [-L]
+           #{cmd} -c VP_FILE         -d DIR [-L] [-n] [-v | -vv]
 
     Commands:
         -l VP_FILE    : list VP package files
