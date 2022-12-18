@@ -263,15 +263,19 @@ class VP
     root_path = options[:root_path]
     if root_path
       case options[:command]
-      when :list               then raise("Cannot use '-d' with list")
-      when :pipe_extract       then raise("Cannot use '-d' with pipe")
+      when :list
+        raise("Cannot use '-d' with list")
+      when :pipe_extract
+        raise("Cannot use '-d' with pipe")
       when :extract, :create
         raise("Invalid '-d' directory: #{root_path.inspect}") if root_path.empty?
       end
     else
       case options[:command]
-      when :extract then raise("Must use '-d' to specify the directory to extract the VP to")
-      when :create  then raise("Must use '-d' to specify the directory to create the VP from")
+      when :extract
+        raise("Must use '-d' to specify the directory to extract the VP to")
+      when :create
+        raise("Must use '-d' to specify the directory to create the VP from")
       end
     end
   end
@@ -324,8 +328,7 @@ class VP
   def read_filename(file)
     # null-terminated string
     string = file.read(ENTRY_NAME_LENGTH)
-    path = string[0...string.index("\0")]
-    path
+    string[0...string.index("\0")]
   end
 
   def read_int(file)
@@ -467,7 +470,7 @@ class VP
 
   def pipe_entry(entry, vp_file)
     vp_file.seek(entry.offset)
-    chunk_size = 1024*1024
+    chunk_size = 1024 * 1024
     bytes_remaining = entry.size
 
     while (bytes_remaining > 0)
@@ -543,7 +546,7 @@ class VP
     return if options[:noop]
     vp_file.seek(entry.offset)
     file = File.open(entry.path, "wb")
-    chunk_size = 1024*1024
+    chunk_size = 1024 * 1024
     bytes_remaining = entry.size
 
     while (bytes_remaining > 0)
@@ -687,7 +690,7 @@ class VP
   end
 
   def archive_file(vp_file, file, entry)
-    chunk_size = 1024*1024
+    chunk_size = 1024 * 1024
     bytes_read = 0
     bytes_written = 0
 
@@ -827,11 +830,11 @@ class VP
 
   def strings(key)
     case key
-    when :skip then (options[:noop]      ? "skip"      : "skipped")
-    when :overwrite then (options[:noop] ? "overwrite" : "overwrote")
-    when :create then (options[:noop]    ? "create"    : "created")
-    when :extract then (options[:noop]   ? "extract"   : "extracted")
-    when :archive then (options[:noop]   ? "archive"   : "archived")
+    when :skip      then options[:noop] ? "skip"      : "skipped"
+    when :overwrite then options[:noop] ? "overwrite" : "overwrote"
+    when :create    then options[:noop] ? "create"    : "created"
+    when :extract   then options[:noop] ? "extract"   : "extracted"
+    when :archive   then options[:noop] ? "archive"   : "archived"
     end
   end
 
