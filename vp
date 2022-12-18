@@ -1,0 +1,866 @@
+#!/usr/bin/env ruby
+
+################################################################################
+# VP.rb                                                                        #
+################################################################################
+#
+# VP Packer/Unpacker for FreeSpace.
+# https://github.com/daftmugi/vp
+
+################################################################################
+# VP Package Spec                                                              #
+################################################################################
+#
+# VP Package
+#     Header
+#     Entry Data
+#     Table
+#
+# Header
+#     char id[4]         // "VPVP"
+#     int version        // 2
+#     int table_offset   // Offset to the entries table
+#     int num_entries    // Number of entries
+#
+# Entry
+#     int offset         // Offset of the entry
+#     int size           // Size of the data
+#     char name[32]      // Null-terminated filename
+#     int timestamp      // Last modified (mtime) as unix time
+#
+# Entry Type
+#     if name == ".." then @end-of-directory
+#     else-if size == 0 then @directory
+#     else @file
+#
+# * Entry Data are stored consecutively without spaces or null-termination.
+# * Valid VP packages begin with a "data" directory.
+# * VP packages can have empty directories (e.g. sparky_hi_fs2.vp "data/fonts/").
+# * VP packages cannot have empty files.
+# * Retail VP packages have directories with timestamps of 0.
+# * Timestamps are not used in identifying directories.
+# * The VP Table does not need to end with ".." (@end-of-directory) entries.
+
+################################################################################
+# MIT License                                                                  #
+################################################################################
+#
+# Copyright (c) 2022 Daft Mugi
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("3.0.0")
+  abort("Ruby 3.0+ is required")
+end
+
+require "fileutils"
+
+class VP
+  VERSION = "1.0.0"
+
+  MAX_VP_SIZE = 2**32-1 # 32-bit unsigned int
+  MAX_ENTRIES = 2**32-1 # 32-bit unsigned int
+
+  # 4-byte null-padded ASCII string, three 32-bit unsigned little-endian integers
+  HEADER_TEMPLATE = "a4L<3"
+  HEADER_SIZE_BYTES = 16      # char[4] + (3 * int)
+  HEADER_ID = "VPVP"
+  HEADER_VERSION = 2
+
+  # two ints, 32-byte null-padded ASCII string, one int
+  ENTRY_TEMPLATE = "L<2a32L<1"
+  ENTRY_NAME_LENGTH = 32      # 31 + null terminater
+  ENTRY_SIZE_BYTES = 44       # (2 * int) + char[32] + int
+
+  Header = Struct.new(:table_offset, :num_entries, keyword_init: true)
+
+  Entry = Struct.new(:name, :path, :is_dir, :offset, :size, :timestamp) do
+    def initialize(name:, path:, is_dir:, offset: 0, size: 0, timestamp: 0)
+      super(name, path, is_dir, offset, size, timestamp)
+    end
+
+    def skip?
+      size == 0 && !is_dir
+    end
+  end
+
+  attr_reader :options
+
+  def self.main(args = ARGV)
+    self.new.run(args)
+  rescue => e
+    abort(e.message)
+  end
+
+  def initialize(opts = nil)
+    @options = default_options()
+    set_options(opts) if opts
+  end
+
+  def default_options
+    {
+      command: nil,
+      regex: nil,
+      vp_path: nil,
+      root_path: nil,
+
+      to_lower: false,
+      noop: false,
+      verbose: false,
+    }
+  end
+
+  def set_options(opts)
+    @options.merge!(opts)
+  end
+
+  def verbose?
+    @options[:verbose] || @options[:very_verbose]
+  end
+
+  def very_verbose?
+    !!@options[:very_verbose]
+  end
+
+  def run(args)
+    # For "list" piped to "less", handle "Broken pipe <STDOUT> (Errno::EPIPE)"
+    Signal.trap("SIGPIPE", "SYSTEM_DEFAULT")
+
+    # For "Ctrl-c" at prompts
+    Signal.trap("SIGINT", "SYSTEM_DEFAULT")
+
+    set_options(process_args(args))
+
+    case options[:command]
+    when :list         then list_vp()
+    when :extract      then extract_vp()
+    when :pipe_extract then pipe_extract_vp()
+    when :create       then create_vp()
+    else raise(usage)
+    end
+  end
+
+  def usage
+    cmd = File.basename($0)
+
+    <<~EOS
+    #{cmd} version #{VERSION}
+
+    Usage: #{cmd} -l [-L] [-v | -vv] VP_FILE [REGEX]
+           #{cmd} -x [-L] [-n] VP_FILE [REGEX] -d DIR
+           #{cmd} -p [-L] VP_FILE [REGEX]
+           #{cmd} -c [-L] [-n] [-v | -vv] VP_FILE -d DIR
+
+    Commands:
+        -l VP_FILE    : list VP package files
+        -x VP_FILE    : extract VP package
+        -p VP_FILE    : extract VP package files to stdout (pipe)
+        -c VP_FILE    : create VP package
+        --help, -h    : print this message
+        --version     : print version
+
+    Options:
+        REGEX         : filter files by a regular expression
+        -d DIR        : create from/extract to directory
+        -L            : convert filenames to lowercase
+        -n            : no-op, dry-run
+        -v            : verbose
+        -vv           : verbose with extra info (very verbose)
+    EOS
+  end
+
+  def process_args(args)
+    options = {}
+
+    if args.size < 1
+      raise(usage)
+    end
+
+    if args.include?("-h") || args.include?("--help")
+      puts(usage)
+      exit(0)
+    end
+
+    if args.include?("--version")
+      puts(VERSION)
+      exit(0)
+    end
+
+    if args.include?("-L")
+      options[:to_lower] = true
+    end
+
+    if args.include?("-n")
+      options[:noop] = true
+    end
+
+    if args.include?("-v")
+      options[:verbose] = true
+    end
+
+    if args.include?("-vv")
+      options[:very_verbose] = true
+    end
+
+    if index = args.find_index("-l")
+      raise(usage) if options[:command]
+      options[:command] = :list
+      raise(usage) unless options[:vp_path] = args[index + 1]
+      options[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-x")
+      raise(usage) if options[:command]
+      options[:command] = :extract
+      raise(usage) unless options[:vp_path] = args[index + 1]
+      options[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-p")
+      raise(usage) if options[:command]
+      options[:command] = :pipe_extract
+      raise(usage) unless options[:vp_path] = args[index + 1]
+      options[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-c")
+      raise(usage) if options[:command]
+      options[:command] = :create
+      raise(usage) unless options[:vp_path] = args[index + 1]
+    end
+
+    if index = args.find_index("-d")
+      raise(usage) unless options[:root_path] = args[index + 1]
+    end
+
+    options
+  end
+
+  def maybe_regex(arg)
+    (arg && !arg.start_with?("-")) ? Regexp.new(arg) : nil
+  end
+
+  def validate_options
+    raise("No command given") unless options[:command]
+    raise("No VP file given") unless options[:vp_path]
+
+    root_path = options[:root_path]
+    if root_path
+      case options[:command]
+      when :list               then raise("Cannot use '-d' with list")
+      when :pipe_extract       then raise("Cannot use '-d' with pipe")
+      when :extract, :create
+        raise("Invalid '-d' directory: #{root_path.inspect}") if root_path.empty?
+      end
+    else
+      case options[:command]
+      when :extract then raise("Must use '-d' to specify the directory to extract the VP to")
+      when :create  then raise("Must use '-d' to specify the directory to create the VP from")
+      end
+    end
+  end
+
+
+  ######################################################################
+  # READ VP
+  ######################################################################
+
+  def open_vp(vp_path, &block)
+    vp_path_expanded = File.expand_path(vp_path)
+
+    raise("File not found: #{vp_path}") unless File.exist?(vp_path)
+    raise("Not a file: #{vp_path}")     unless File.file?(vp_path)
+
+    File.open(vp_path_expanded, "rb") do |vp_file|
+      id = vp_file.read(4) # "VPVP"
+      raise("Not a VP package: #{vp_path}") if id != HEADER_ID
+      version = read_int(vp_file)
+      raise("Invalid VP version: #{version}") if version != HEADER_VERSION
+      yield(vp_file)
+    end
+  end
+
+  def each_vp_entry(vp_file, &block)
+    header = read_header(vp_file)
+    table = extract_table(
+      vp_file,
+      header.table_offset,
+      header.num_entries,
+      options
+    )
+
+    table.each do |entry|
+      yield(entry)
+    end
+  end
+
+  def read_header(vp_file)
+    vp_file.seek(8) # id + version
+    table_offset = read_int(vp_file)
+    num_entries = read_int(vp_file)
+
+    Header.new(
+      table_offset: table_offset,
+      num_entries: num_entries
+    )
+  end
+
+  def read_filename(file)
+    # null-terminated string
+    string = file.read(ENTRY_NAME_LENGTH)
+    path = string[0...string.index("\0")]
+    path
+  end
+
+  def read_int(file)
+    # 32-bit unsigned little
+    file.read(4).unpack("L<")[0]
+  end
+
+  def extract_table(vp_file, table_offset, num_entries, options)
+    vp_file.seek(table_offset)
+
+    table = []
+    dir_path = []
+
+    (0...num_entries).each do |i|
+      offset = read_int(vp_file)
+      size = read_int(vp_file)
+      filename = read_filename(vp_file)
+      filename = filename.downcase if options[:to_lower]
+      timestamp = read_int(vp_file)
+
+      if filename == ".."
+        raise("Directory not size 0: ..") unless size == 0
+        dir_path.pop()
+        next
+      end
+
+      path =
+        if size == 0 # dir
+          dir_path.push(filename)
+          File.join(dir_path, "")
+        else # file
+          File.join(dir_path, filename)
+        end
+
+      if options[:regex]
+        if options[:to_lower]
+          next unless path.downcase.match?(options[:regex])
+        else
+          next unless path.match?(options[:regex])
+        end
+      end
+
+      entry = Entry.new(
+        name: filename,
+        path: path,
+        is_dir: size == 0,
+        offset: offset,
+        size: size,
+        timestamp: timestamp
+      )
+
+      table.push(entry)
+    end
+
+    table
+  end
+
+
+  ######################################################################
+  # LIST
+  ######################################################################
+
+  def list_vp
+    set_options(command: :list)
+    validate_options()
+
+    open_vp(options[:vp_path]) do |vp_file|
+      print_list_header()
+
+      total_size = 0
+      total_files = 0
+
+      each_vp_entry(vp_file) do |entry|
+        total_size += entry.size
+        total_files += 1
+        print_list_entry(entry, total_size, total_files)
+      end
+
+      print_list_footer(total_size, total_files)
+    end
+  end
+
+  def print_list_entry(entry, total_size, total_files)
+    if verbose?
+      entry_data = [format_size(entry.size)]
+      entry_data << entry.offset if very_verbose?
+      entry_data << format_timestamp(entry.timestamp)
+      entry_data << entry.path
+
+      fmt_str = very_verbose? ? "%10s  %10s  %20s  %s" : "%10s  %20s  %s"
+      puts(fmt_str % entry_data)
+    else
+      puts(entry.path)
+    end
+  end
+
+  def print_list_header
+    return unless verbose?
+    puts("Archive: #{options[:vp_path]}")
+
+    if very_verbose?
+      puts("   Size       Offset       Date       Time    Path")
+      puts("----------  ----------  ----------  --------  -----------------------------------")
+    else
+      puts("   Size        Date       Time    Path")
+      puts("----------  ----------  --------  -----------------------------------")
+    end
+  end
+
+  def print_list_footer(total_size, total_files)
+    return unless verbose?
+    files_string = total_files == 1 ? "file" : "files"
+
+    if very_verbose?
+      puts("----------                                    -----------------------------------")
+      puts("%10d                                    %d %s" % [total_size, total_files, files_string])
+    else
+      puts("----------                        -----------------------------------")
+      puts("%10d                        %d %s" % [total_size, total_files, files_string])
+    end
+  end
+
+
+  ######################################################################
+  # PIPE EXTRACT
+  ######################################################################
+
+  def pipe_extract_vp
+    set_options(command: :pipe_extract)
+    validate_options()
+
+    open_vp(options[:vp_path]) do |vp_file|
+      each_vp_entry(vp_file) do |entry|
+        next if entry.is_dir
+        pipe_entry(entry, vp_file)
+      end
+    end
+  end
+
+  def pipe_entry(entry, vp_file)
+    vp_file.seek(entry.offset)
+    chunk_size = 1024*1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = vp_file.read(read_size)
+      written_size = $stdout.write(bytes)
+      bytes_remaining -= written_size
+    end
+  end
+
+
+  ######################################################################
+  # EXTRACT
+  ######################################################################
+
+  def extract_vp
+    set_options(command: :extract)
+    validate_options()
+
+    open_vp(options[:vp_path]) do |vp_file|
+      pwd = Dir.pwd()
+      root_path = options[:root_path]
+
+      if root_path && !current_dir?(root_path)
+        raise("File exists: #{root_path}") if File.file?(root_path)
+
+        if options[:noop] && !File.directory?(root_path)
+          raise("Target '-d' directory must exist when noop")
+        end
+
+        mkdir_p(root_path)
+        Dir.chdir(root_path)
+      end
+
+      entry_fmt_str = "%10s    %s"
+      handle_conflict_choice = :not_set
+
+      each_vp_entry(vp_file) do |entry|
+        entry_data =
+          if entry.is_dir
+            if File.exist?(entry.path)
+              [strings(:skip), entry.path]
+            else
+              mkdir_p(entry.path)
+              [strings(:create), entry.path]
+            end
+          else # file
+            if File.exist?(entry.path)
+              handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
+              case handle_conflict_choice
+              when :yes, :all
+                write_entry(entry, vp_file)
+                [strings(:overwrite), entry.path]
+              else
+                [strings(:skip), entry.path]
+              end
+            else
+              dir_path = File.dirname(entry.path)
+              mkdir_p(dir_path)
+              write_entry(entry, vp_file)
+              [strings(:extract), entry.path]
+            end
+          end
+
+        puts(entry_fmt_str % entry_data)
+      end
+
+      Dir.chdir(pwd)
+    end
+  end
+
+  def write_entry(entry, vp_file)
+    return if options[:noop]
+    vp_file.seek(entry.offset)
+    file = File.open(entry.path, "wb")
+    chunk_size = 1024*1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = vp_file.read(read_size)
+      written_size = file.write(bytes)
+      raise("Error writing file: #{entry.path}") unless read_size == written_size
+      bytes_remaining -= written_size
+    end
+
+    file.close()
+    File.utime(entry.timestamp, entry.timestamp, entry.path)
+  end
+
+  def handle_conflict(path, previous_conflict_choice)
+    choice = :invalid
+    conflict_choice =
+      case previous_conflict_choice
+      when :all, :none
+        previous_conflict_choice
+      else
+        choice = prompt_user_about_conflict(path) while choice == :invalid
+        choice
+      end
+
+    conflict_choice
+  end
+
+  def prompt_user_about_conflict(path)
+    $stderr.print("replace? #{path} [y]es, [n]o, [A]ll, [N]one: ")
+    choice = $stdin.readline().strip()
+
+    case choice
+    when "y" then :yes
+    when "n" then :no
+    when "A" then :all
+    when "N" then :none
+    else :invalid
+    end
+  end
+
+
+  ######################################################################
+  # CREATE
+  ######################################################################
+
+  def create_vp
+    set_options(command: :create)
+    validate_options()
+
+    vp_path = options[:vp_path]
+    vp_path_expanded = File.expand_path(options[:vp_path])
+    root_path = options[:root_path]
+
+    raise("File already exists: #{vp_path}")           if File.exist?(vp_path)
+    raise("Not a directory: #{root_path}")             if File.file?(root_path)
+    raise("Directory not found: #{root_path}")     unless File.directory?(root_path)
+    raise("Source directory must be named 'data'") unless File.basename(root_path) == "data"
+
+    dirname = File.dirname(options[:root_path])
+    Dir.chdir(dirname) do
+      file_list = data_file_list()
+      validate_file_list(file_list)
+
+      new_vp_file(vp_path_expanded) do |vp_file|
+        entries = archive_files(vp_file, file_list)
+        table_offset = archive_table(vp_file, entries)
+        archive_header(vp_file, table_offset, entries.size)
+      end
+    end
+  end
+
+  def new_vp_file(path, &block)
+    if options[:noop]
+      require "stringio"
+      StringIO.open("", "wb", &block)
+    else
+      File.open(path, "wb", &block)
+    end
+  end
+
+  def archive_header(vp_file, table_offset, num_entries)
+    vp_file.seek(0)
+    header = [
+      HEADER_ID,
+      HEADER_VERSION,
+      table_offset,
+      num_entries
+    ]
+    packed_header = header.pack(HEADER_TEMPLATE)
+    vp_write(vp_file, packed_header)
+  end
+
+  def archive_table(vp_file, entries)
+    table_offset = vp_file.tell()
+
+    entries.each do |entry|
+      entry_name = options[:to_lower] ? entry.name.downcase() : entry.name
+
+      entry_data = [
+        entry.offset,
+        entry.size,
+        entry_name.encode("ascii"),
+        entry.timestamp,
+      ]
+      packed_entry = entry_data.pack(ENTRY_TEMPLATE)
+      vp_write(vp_file, packed_entry)
+    end
+
+    table_offset
+  end
+
+  def archive_files(vp_file, file_list)
+    vp_file.seek(HEADER_SIZE_BYTES)
+    offset = vp_file.tell()
+    entries = []
+
+    print_create_header()
+
+    file_list.each do |entry|
+      if entry.skip?
+        print_create_entry(entry)
+      else
+        entry.offset = offset
+
+        unless entry.is_dir
+          File.open(entry.path, "rb") do |file|
+            archive_file(vp_file, file, entry)
+          end
+          offset += entry.size
+        end
+
+        print_create_entry(entry)
+        entries.append(entry)
+      end
+    end
+
+    print_create_footer(entries)
+
+    entries
+  end
+
+  def archive_file(vp_file, file, entry)
+    chunk_size = 1024*1024
+    bytes_read = 0
+    bytes_written = 0
+
+    until file.eof?
+      # read() does not read passed eof even when chunk_size > bytes_remaining
+      bytes = file.read(chunk_size)
+      bytes_read += bytes.size
+      bytes_written += vp_write(vp_file, bytes)
+    end
+
+    return if options[:noop]  # because no bytes written
+    raise("Error archiving file: #{file.path}") unless bytes_read == bytes_written
+    raise("Error archiving file (size differs): #{file.path}") unless entry.size == file.tell()
+  end
+
+  def validate_file_list(file_list)
+    entries_size = file_list.reduce(0) { |sum, e| e.skip? ? sum : sum + 1 }
+
+    if entries_size > MAX_ENTRIES
+      raise("VP package cannot have more than #{MAX_ENTRIES} files")
+    end
+
+    data_size_bytes = file_list.reduce(0) { |acc, e| acc + e.size }
+    table_size_bytes = ENTRY_SIZE_BYTES * file_list.size
+    total_size = HEADER_SIZE_BYTES + data_size_bytes + table_size_bytes
+
+    if total_size > MAX_VP_SIZE
+      raise("VP package cannot be larger than #{MAX_VP_SIZE} bytes")
+    end
+  end
+
+  def valid_entry_name_length?(name)
+    actual_length = ENTRY_NAME_LENGTH - 1 # minus null terminator
+    name.length <= actual_length
+  end
+
+  def clean_filename(filename)
+    unless valid_entry_name_length?(filename)
+      raise("Filename more than 31 characters: #{filename}")
+    end
+
+    begin
+      filename.encode("ascii")
+    rescue
+      raise("Filename not ASCII compatible: #{filename}")
+    end
+  end
+
+  def data_file_list
+    get_file_list([], "data", "data")
+  end
+
+  def get_file_list(list, name, path)
+    if File.directory?(path)
+      add_directory_to_list(list, name, path)
+    else
+      add_file_to_list(list, name, path)
+    end
+  end
+
+  def add_directory_to_list(list, name, path)
+    list << Entry.new(name: name, path: path, is_dir: true)
+
+    Dir.children(path).sort().each do |filename|
+      filename = clean_filename(filename)
+      file_path = File.join(path, filename)
+      list = get_file_list(list, filename, file_path)
+    end
+
+    list << Entry.new(name: "..", path: File.join(path, ".."), is_dir: true)
+  end
+
+  def add_file_to_list(list, name, path)
+    entry = Entry.new(name: name, path: path, is_dir: false)
+    entry.size = File.size(path)
+    entry.timestamp = File.mtime(path).to_i()
+    list << entry
+  end
+
+  def print_create_entry(entry)
+    return if entry.name == ".."
+    action = entry.skip? ? :skip : :archive
+    entry_path = options[:to_lower] ? entry.path.downcase() : entry.path
+
+    if verbose?
+      entry_data = [strings(action)]
+      entry_data << format_size(entry.size, entry.is_dir)
+      entry_data << entry.offset if very_verbose?
+      entry_data << format_timestamp(entry.timestamp)
+      entry_data << entry_path
+
+      fmt_str = very_verbose? ? "%-8s  %10s  %10s  %20s  %s" : "%-8s  %10s  %20s  %s"
+    else
+      fmt_str = "%8s  %s"
+      entry_data = [
+        strings(action),
+        entry_path,
+      ]
+    end
+
+    puts(fmt_str % entry_data)
+  end
+
+  def print_create_header
+    return unless verbose?
+
+    if very_verbose?
+      puts(" Action      Size       Offset       Date       Time    Path")
+      puts("--------  ----------  ----------  ----------  --------  -----------------------------------")
+    else
+      puts(" Action      Size        Date       Time    Path")
+      puts("--------  ----------  ----------  --------  -----------------------------------")
+    end
+  end
+
+  def print_create_footer(entries)
+    return unless verbose?
+    total_size = entries.reduce(0) { |acc, e| acc + e.size }
+    total_files = entries.reduce(0) { |sum, e| (e.skip? || e.name == "..") ? sum : sum + 1 }
+    files_string = total_files == 1 ? "file" : "files"
+
+    if very_verbose?
+      puts("--------  ----------  ----------  ----------  --------  -----------------------------------")
+      fmt_str = "          %10d                                    %d %s"
+    else
+      puts("--------  ----------  ----------  --------  -----------------------------------")
+      fmt_str = "          %10d                        %d %s"
+    end
+
+    puts(fmt_str % [total_size, total_files, files_string])
+  end
+
+
+  ######################################################################
+  # HELPERS
+  ######################################################################
+
+  def strings(key)
+    case key
+    when :skip then (options[:noop]      ? "skip"      : "skipped")
+    when :overwrite then (options[:noop] ? "overwrite" : "overwrote")
+    when :create then (options[:noop]    ? "create"    : "created")
+    when :extract then (options[:noop]   ? "extract"   : "extracted")
+    when :archive then (options[:noop]   ? "archive"   : "archived")
+    end
+  end
+
+  def current_dir?(path)
+    File.expand_path(path) == Dir.pwd
+  end
+
+  def mkdir_p(path)
+    return if options[:noop]
+    return if File.directory?(path)
+    FileUtils.mkdir_p(path)
+  end
+
+  def vp_write(vp_file, data)
+    return 0 if options[:noop]
+    vp_file.write(data)
+  end
+
+  def format_timestamp(timestamp)
+    timestamp == 0 ? "" : Time.at(timestamp).strftime("%F  %H:%M:%S")
+  end
+
+  def format_size(size, is_dir = true)
+    return "" if size == 0 && is_dir
+    return 0  if size == 0
+    size
+  end
+end
+
+if $0 == __FILE__
+  VP.main()
+end
