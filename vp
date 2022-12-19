@@ -79,14 +79,16 @@ class VP
 
   # 4-byte null-padded ASCII string, three 32-bit unsigned little-endian integers
   HEADER_TEMPLATE = "a4V3"
-  HEADER_SIZE_BYTES = 16      # char[4] + (3 * int)
+  # id(char[4]) + version(4) + table_offset(4) + num_entries(4)
+  HEADER_SIZE_BYTES = 16
   HEADER_ID = "VPVP"
   HEADER_VERSION = 2
 
   # two ints, 32-byte null-padded ASCII string, one int
   ENTRY_TEMPLATE = "V2a32V1"
-  ENTRY_NAME_LENGTH = 32      # 31 + null terminater
-  ENTRY_SIZE_BYTES = 44       # (2 * int) + char[32] + int
+  # offset(4) + size(4) + name(char[32]) + timestamp(4)
+  ENTRY_SIZE_BYTES = 44
+  ENTRY_NAME_LENGTH = 32
 
   Header = Struct.new(:table_offset, :num_entries, keyword_init: true)
 
@@ -276,8 +278,6 @@ class VP
         raise("Cannot use '-d' with list")
       when :pipe_extract
         raise("Cannot use '-d' with pipe")
-      when :extract, :create
-        raise("Invalid '-d' directory: #{root_path.inspect}") if root_path.empty?
       end
     else
       case options[:command]
@@ -311,12 +311,7 @@ class VP
 
   def each_vp_entry(vp_file, &block)
     header = read_header(vp_file)
-    table = extract_table(
-      vp_file,
-      header.table_offset,
-      header.num_entries,
-      options
-    )
+    table = extract_table(vp_file, header.table_offset, header.num_entries)
 
     table.each do |entry|
       yield(entry)
@@ -324,7 +319,7 @@ class VP
   end
 
   def read_header(vp_file)
-    vp_file.seek(8) # id + version
+    vp_file.seek(8) # id(4) + version(4)
     table_offset = read_int(vp_file)
     num_entries = read_int(vp_file)
 
@@ -344,7 +339,7 @@ class VP
     file.read(4).unpack("V")[0]
   end
 
-  def extract_table(vp_file, table_offset, num_entries, options)
+  def extract_table(vp_file, table_offset, num_entries)
     vp_file.seek(table_offset)
 
     table = []
@@ -365,19 +360,13 @@ class VP
 
       path =
         if size == 0 # dir
-          dir_path.push(filename)
+          dir_path << filename
           File.join(dir_path, "")
         else # file
           File.join(dir_path, filename)
         end
 
-      if options[:regex]
-        if to_lower?
-          next unless path.downcase.match?(options[:regex])
-        else
-          next unless path.match?(options[:regex])
-        end
-      end
+      next if options[:regex] && !path.match?(options[:regex])
 
       entry = Entry.new(
         name: filename,
@@ -388,7 +377,7 @@ class VP
         timestamp: timestamp
       )
 
-      table.push(entry)
+      table << entry
     end
 
     table
@@ -502,9 +491,10 @@ class VP
       pwd = Dir.pwd()
       root_path = options[:root_path]
 
-      if root_path && !current_dir?(root_path)
-        raise("File exists: #{root_path}") if File.file?(root_path)
+      raise("Invalid target directory: ''") if root_path.empty?
+      raise("File exists: #{root_path}")    if File.file?(root_path)
 
+      if root_path && !current_dir?(root_path)
         if noop? && !File.directory?(root_path)
           raise("Target '-d' directory must exist when noop")
         end
@@ -561,7 +551,6 @@ class VP
       read_size = [chunk_size, bytes_remaining].min()
       bytes = vp_file.read(read_size)
       written_size = file.write(bytes)
-      raise("Error writing file: #{entry.path}") unless read_size == written_size
       bytes_remaining -= written_size
     end
 
@@ -609,6 +598,7 @@ class VP
     vp_path_expanded = File.expand_path(options[:vp_path])
     root_path = options[:root_path]
 
+    raise("Invalid source directory: ''")              if root_path.empty?
     raise("File already exists: #{vp_path}")           if File.exist?(vp_path)
     raise("Not a directory: #{root_path}")             if File.file?(root_path)
     raise("Directory not found: #{root_path}")     unless File.directory?(root_path)
@@ -681,14 +671,12 @@ class VP
         entry.offset = offset
 
         unless entry.is_dir
-          File.open(entry.path, "rb") do |file|
-            archive_file(vp_file, file, entry)
-          end
+          archive_file(vp_file, entry)
           offset += entry.size
         end
 
         print_create_entry(entry)
-        entries.append(entry)
+        entries << entry
       end
     end
 
@@ -697,25 +685,20 @@ class VP
     entries
   end
 
-  def archive_file(vp_file, file, entry)
-    chunk_size = 1024 * 1024
-    bytes_read = 0
-    bytes_written = 0
+  def archive_file(vp_file, entry)
+    File.open(entry.path, "rb") do |file|
+      chunk_size = 1024 * 1024
 
-    until file.eof?
-      # read() does not read passed eof even when chunk_size > bytes_remaining
-      bytes = file.read(chunk_size)
-      bytes_read += bytes.size
-      bytes_written += vp_write(vp_file, bytes)
+      until file.eof?
+        # read() does not read passed eof even when chunk_size > bytes_remaining
+        bytes = file.read(chunk_size)
+        vp_write(vp_file, bytes)
+      end
     end
-
-    return if noop?  # because no bytes written
-    raise("Error archiving file: #{file.path}") unless bytes_read == bytes_written
-    raise("Error archiving file (size differs): #{file.path}") unless entry.size == file.tell()
   end
 
   def validate_file_list(file_list)
-    entries_size = file_list.reduce(0) { |sum, e| e.skip? ? sum : sum + 1 }
+    entries_size = file_list.sum { |e| e.skip? ? 0 : 1 }
 
     if entries_size > MAX_ENTRIES
       raise("VP package cannot have more than #{MAX_ENTRIES} files")
@@ -730,14 +713,11 @@ class VP
     end
   end
 
-  def valid_entry_name_length?(name)
-    actual_length = ENTRY_NAME_LENGTH - 1 # minus null terminator
-    name.length <= actual_length
-  end
-
   def clean_filename(filename)
-    unless valid_entry_name_length?(filename)
-      raise("Filename more than 31 characters: #{filename}")
+    max_length = ENTRY_NAME_LENGTH - 1 # minus null terminator
+
+    if filename.length > max_length
+      raise("Filename more than #{max_length} characters: #{filename}")
     end
 
     begin
@@ -816,8 +796,8 @@ class VP
 
   def print_create_footer(entries)
     return unless verbose?
-    total_size = entries.reduce(0) { |acc, e| acc + e.size }
-    total_files = entries.reduce(0) { |sum, e| (e.skip? || e.name == "..") ? sum : sum + 1 }
+    total_size = entries.sum { |e| e.size }
+    total_files = entries.sum { |e| (e.skip? || e.name == "..") ? 0 : 1 }
     files_string = total_files == 1 ? "file" : "files"
 
     if very_verbose?
@@ -867,8 +847,7 @@ class VP
 
   def format_size(size, is_dir = true)
     return "" if size == 0 && is_dir
-    return 0  if size == 0
-    size
+    size.to_s()
   end
 end
 
