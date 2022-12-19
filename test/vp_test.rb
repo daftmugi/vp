@@ -9,7 +9,8 @@ require "minitest/autorun"
 class VPTest < Minitest::Test
   def test_no_vp_file
     vp = VP.new
-    assert_raises(RuntimeError, "No VP file given") { vp.list_vp() }
+    error = assert_raises(RuntimeError) { vp.list_vp() }
+    assert_equal("No VP file given", error.message)
   end
 
   def test_list_very_verbose
