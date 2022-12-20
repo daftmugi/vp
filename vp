@@ -488,62 +488,52 @@ class VP
     validate_options()
 
     open_vp(options[:vp_path]) do |vp_file|
-      pwd = Dir.pwd()
       root_path = options[:root_path]
 
       raise("Invalid target directory: ''") if root_path.empty?
       raise("File exists: #{root_path}")    if File.file?(root_path)
 
-      if root_path && !current_dir?(root_path)
-        if noop? && !File.directory?(root_path)
-          raise("Target '-d' directory must exist when noop")
-        end
-
-        mkdir_p(root_path)
-        Dir.chdir(root_path)
-      end
-
       entry_fmt_str = "%10s    %s"
       handle_conflict_choice = :not_set
 
       each_vp_entry(vp_file) do |entry|
+        write_path = File.join(root_path, entry.path)
+
         entry_data =
           if entry.is_dir
-            if File.exist?(entry.path)
+            if File.exist?(write_path)
               [strings(:skip), entry.path]
             else
-              mkdir_p(entry.path)
+              mkdir_p(write_path)
               [strings(:create), entry.path]
             end
           else # file
-            if File.exist?(entry.path)
+            if File.exist?(write_path)
               handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
               case handle_conflict_choice
               when :yes, :all
-                write_entry(entry, vp_file)
+                write_entry(vp_file, write_path, entry)
                 [strings(:overwrite), entry.path]
               else
                 [strings(:skip), entry.path]
               end
             else
-              dir_path = File.dirname(entry.path)
+              dir_path = File.dirname(write_path)
               mkdir_p(dir_path)
-              write_entry(entry, vp_file)
+              write_entry(vp_file, write_path, entry)
               [strings(:extract), entry.path]
             end
           end
 
         puts(entry_fmt_str % entry_data)
       end
-
-      Dir.chdir(pwd)
     end
   end
 
-  def write_entry(entry, vp_file)
+  def write_entry(vp_file, write_path, entry)
     return if noop?
     vp_file.seek(entry.offset)
-    file = File.open(entry.path, "wb")
+    file = File.open(write_path, "wb")
     chunk_size = 1024 * 1024
     bytes_remaining = entry.size
 
@@ -555,7 +545,7 @@ class VP
     end
 
     file.close()
-    File.utime(entry.timestamp, entry.timestamp, entry.path)
+    File.utime(entry.timestamp, entry.timestamp, write_path)
   end
 
   def handle_conflict(path, previous_conflict_choice)
@@ -824,10 +814,6 @@ class VP
     when :extract   then noop? ? "extract"   : "extracted"
     when :archive   then noop? ? "archive"   : "archived"
     end
-  end
-
-  def current_dir?(path)
-    File.expand_path(path) == Dir.pwd
   end
 
   def mkdir_p(path)

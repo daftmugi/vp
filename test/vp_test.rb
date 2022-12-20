@@ -35,7 +35,7 @@ class VPTest < Minitest::Test
   end
 
   def test_extract
-    vp = VP.new(vp_path: "test_data/testvp.vp", root_path: "test_data/data/emptydir", noop: true)
+    vp = VP.new(vp_path: "test_data/testvp.vp", root_path: "test_data/outdir", noop: true)
 
     expected = <<-EOS
     create    data/
