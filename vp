@@ -361,7 +361,7 @@ class VP
       path =
         if size == 0 # dir
           dir_path << filename
-          File.join(dir_path, "")
+          File.join(dir_path)
         else # file
           File.join(dir_path, filename)
         end
@@ -409,16 +409,18 @@ class VP
   end
 
   def print_list_entry(entry, total_size, total_files)
+    entry_path = format_path(entry.path, entry.is_dir)
+
     if verbose?
       entry_data = [format_size(entry.size)]
       entry_data << entry.offset if very_verbose?
       entry_data << format_timestamp(entry.timestamp)
-      entry_data << entry.path
+      entry_data << entry_path
 
       fmt_str = very_verbose? ? "%10s  %10s  %20s  %s" : "%10s  %20s  %s"
       puts(fmt_str % entry_data)
     else
-      puts(entry.path)
+      puts(entry_path)
     end
   end
 
@@ -487,47 +489,82 @@ class VP
     set_options(command: :extract)
     validate_options()
 
+    root_path = options[:root_path]
+    raise("Invalid target directory: ''") if root_path.empty?
+    raise("File exists: #{root_path}")    if File.file?(root_path)
+
     open_vp(options[:vp_path]) do |vp_file|
-      root_path = options[:root_path]
-
-      raise("Invalid target directory: ''") if root_path.empty?
-      raise("File exists: #{root_path}")    if File.file?(root_path)
-
       entry_fmt_str = "%10s    %s"
       handle_conflict_choice = :not_set
 
       each_vp_entry(vp_file) do |entry|
         write_path = File.join(root_path, entry.path)
+        parent_path = File.dirname(write_path)
+        file_in_path = get_closest_file_in_path(parent_path)
 
-        entry_data =
+        # NOTE
+        #   Warn that directory from archive cannot overwrite file on disk.
+        #   Warn that file from archive cannot overwrite directory on disk.
+        status =
           if entry.is_dir
-            if File.exist?(write_path)
-              [strings(:skip), entry.path]
+            if File.directory?(write_path)
+              strings(:skip)
+            elsif File.file?(write_path)
+              :dir_is_file
+            elsif file_in_path
+              :dir_path_has_file
             else
               mkdir_p(write_path)
-              [strings(:create), entry.path]
+              strings(:create)
             end
           else # file
-            if File.exist?(write_path)
+            if File.directory?(write_path)
+              :file_is_dir
+            elsif File.file?(write_path)
               handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
               case handle_conflict_choice
               when :yes, :all
                 write_entry(vp_file, write_path, entry)
-                [strings(:overwrite), entry.path]
+                strings(:overwrite)
               else
-                [strings(:skip), entry.path]
+                strings(:skip)
               end
+            elsif file_in_path
+              :file_path_has_file
             else
-              dir_path = File.dirname(write_path)
-              mkdir_p(dir_path)
+              mkdir_p(parent_path)
               write_entry(vp_file, write_path, entry)
-              [strings(:extract), entry.path]
+              strings(:extract)
             end
           end
 
-        puts(entry_fmt_str % entry_data)
+        case status
+        when :file_is_dir, :dir_is_file, :dir_path_has_file, :file_path_has_file
+          error_message_1 =
+            case status
+            when :file_is_dir
+              "%s exists but is not a file" % [format_path(write_path, true)]
+            when :dir_is_file
+              "%s exists but is not a directory" % [write_path]
+            else
+              "%s exists but is not a directory" % [file_in_path]
+            end
+          puts(entry_fmt_str % ["error", error_message_1])
+          error_message_2 = "-> skipping %s" % [format_path(entry.path, entry.is_dir)]
+          puts(entry_fmt_str % ["", error_message_2])
+        else
+          puts(entry_fmt_str % [status, format_path(entry.path, entry.is_dir)])
+        end
       end
     end
+  end
+
+  def get_closest_file_in_path(path)
+    return nil   if File.directory?(path)
+    return path  if File.file?(path)
+
+    parent = File.dirname(path)
+    get_closest_file_in_path(parent)
   end
 
   def write_entry(vp_file, write_path, entry)
@@ -752,6 +789,7 @@ class VP
     return if entry.name == ".."
     action = entry.skip? ? :skip : :archive
     entry_path = to_lower? ? entry.path.downcase() : entry.path
+    entry_path = format_path(entry_path, entry.is_dir)
 
     if verbose?
       entry_data = [strings(action)]
@@ -834,6 +872,10 @@ class VP
   def format_size(size, is_dir = true)
     return "" if size == 0 && is_dir
     size.to_s()
+  end
+
+  def format_path(path, is_dir = false)
+    is_dir ? File.join(path, "") : path
   end
 end
 

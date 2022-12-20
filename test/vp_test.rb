@@ -78,10 +78,10 @@ class VPTest < Minitest::Test
     expected = <<~EOS
      Action      Size       Offset       Date       Time    Path
     --------  ----------  ----------  ----------  --------  -----------------------------------
-    archive                       16                        data
-    archive                       16                        data/emptydir
+    archive                       16                        data/
+    archive                       16                        data/emptydir/
     skip               0           0  2022-12-17  13:49:32  data/emptyfile
-    archive                       16                        data/testdir
+    archive                       16                        data/testdir/
     archive            2          16  2022-12-17  13:50:47  data/testdir/a.txt
     archive            2          18  2022-12-17  13:50:50  data/testdir/b.txt
     archive            2          20  2022-12-17  13:50:54  data/testdir/c.txt
@@ -117,5 +117,26 @@ class VPTest < Minitest::Test
 
       assert_equal(expected, file_list_names)
     end
+  end
+
+  def test_file_directory_mismatch_on_disk
+    vp = VP.new(vp_path: "test_data/testvp.vp", root_path: "test_data/conflicts", noop: true)
+
+    expected = <<-EOS
+      skip    data/
+      skip    data/emptydir/
+     error    test_data/conflicts/data/testdir exists but is not a directory
+              -> skipping data/testdir/
+     error    test_data/conflicts/data/testdir exists but is not a directory
+              -> skipping data/testdir/a.txt
+     error    test_data/conflicts/data/testdir exists but is not a directory
+              -> skipping data/testdir/b.txt
+     error    test_data/conflicts/data/testdir exists but is not a directory
+              -> skipping data/testdir/c.txt
+     error    test_data/conflicts/data/testfile/ exists but is not a file
+              -> skipping data/testfile
+    EOS
+
+    assert_output(expected, "") { vp.extract_vp() }
   end
 end
