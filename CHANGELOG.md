@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.0.4
+
+* Some code improvements.
+
+
 ## v1.0.3
 
 * Fix typo in usage text.
