@@ -59,7 +59,7 @@ Options:
     -n            : no-op, dry-run
     -v            : verbose
     -vv           : verbose with extra info (very verbose)
-    --debug       : print more on error
+    --debug       : print more detailed error messages
 ```
 
 
