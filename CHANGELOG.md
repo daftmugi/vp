@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.0.3
+
+* Fix typo in usage text.
+
+
 ## v1.0.2
 
 * Add find duplicates '-D' command.
