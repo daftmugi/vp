@@ -18,11 +18,6 @@ See [*.VP on the FreeSpace Wiki](https://wiki.hard-light.net/index.php/*.VP).
 * List and create commands have verbose and very verbose modes.
 
 
-## Usage
-
-* See `vp --help`.
-
-
 ## Requirements
 
 * Ruby 3.0+
@@ -34,6 +29,33 @@ See [*.VP on the FreeSpace Wiki](https://wiki.hard-light.net/index.php/*.VP).
 
 * Use `vp` as is or copy it somewhere included in the `PATH`.
 * **NOTE:** `vp` can be renamed to something else if desired.
+
+
+## Usage
+
+```
+Usage: vp -l VP_FILE [REGEX]        [-L]      [-v | -vv]
+       vp -x VP_FILE [REGEX] -d DIR [-L] [-n]
+       vp -p VP_FILE [REGEX]        [-L]
+       vp -c VP_FILE         -d DIR [-L] [-n] [-v | -vv]
+
+Commands:
+    -l VP_FILE    : list VP package files
+    -x VP_FILE    : extract VP package
+    -p VP_FILE    : extract VP package files to stdout (pipe)
+    -c VP_FILE    : create VP package
+    --help, -h    : print this message
+    --version     : print version
+
+Options:
+    REGEX         : filter files by a regular expression
+    -d DIR        : create from/extract to directory
+    -L            : convert filenames to lowercase
+    -n            : no-op, dry-run
+    -v            : verbose
+    -vv           : verbose with extra info (very verbose)
+    --debug       : print more on error
+```
 
 
 ## Thanks
