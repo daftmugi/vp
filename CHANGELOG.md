@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.0.2
+
+* Add find duplicates '-D' command.
+
+
 ## v1.0.1
 
 * Add '--debug' flag.
