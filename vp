@@ -209,7 +209,7 @@ class VP
     cmd = File.basename($0)
 
     <<~EOS
-    Usage: #{cmd} -D [EXCLUDE_PAKS]
+    Usage: #{cmd} -D [EXCLUDE_VPS]
 
     -D
         Finds duplicate file paths in VP packages of the current directory.

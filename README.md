@@ -66,7 +66,7 @@ Options:
 ## Usage: Find Duplicates
 
 ```
-Usage: vp -D [EXCLUDE_PAKS]
+Usage: vp -D [EXCLUDE_VPS]
 
 -D
     Finds duplicate file paths in VP packages of the current directory.
