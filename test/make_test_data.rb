@@ -71,3 +71,4 @@ end
 
 create_data_dir()
 create_conflicts_dir()
+FileUtils.touch(File.join("test_data", "TEST_DATA_CREATED"))

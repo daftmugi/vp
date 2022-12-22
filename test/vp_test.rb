@@ -4,6 +4,10 @@ load File.expand_path("../../vp", __FILE__)
 TEST_PATH = File.expand_path("..", __FILE__)
 Dir.chdir(TEST_PATH)
 
+unless File.file?(File.join("test_data", "TEST_DATA_CREATED"))
+  abort("Missing some test data.\nRun make_test_data.rb at least once.")
+end
+
 require "minitest/autorun"
 
 class VPTest < Minitest::Test
