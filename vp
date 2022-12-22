@@ -121,6 +121,7 @@ class VP
     {
       command: nil,
       regex: nil,
+      ignore_vps: [],
       vp_path: nil,
       root_path: nil,
 
@@ -161,10 +162,11 @@ class VP
     set_options(process_args(args))
 
     case options[:command]
-    when :list         then list_vp()
-    when :extract      then extract_vp()
-    when :pipe_extract then pipe_extract_vp()
-    when :create       then create_vp()
+    when :list             then list_vp()
+    when :extract          then extract_vp()
+    when :pipe_extract     then pipe_extract_vp()
+    when :create           then create_vp()
+    when :find_duplicates  then find_duplicates()
     else raise(usage)
     end
   end
@@ -179,23 +181,78 @@ class VP
            #{cmd} -x VP_FILE [REGEX] -d DIR [-L] [-n]
            #{cmd} -p VP_FILE [REGEX]        [-L]
            #{cmd} -c VP_FILE         -d DIR [-L] [-n] [-v | -vv]
+           #{cmd} -D [EXCLUDE_VPS]
 
     Commands:
         -l VP_FILE    : list VP package files
         -x VP_FILE    : extract VP package
         -p VP_FILE    : extract VP package files to stdout (pipe)
         -c VP_FILE    : create VP package
+        -D            : read VP packages and print duplicates
+        -D help       : print more details about -D usage
         --help, -h    : print this message
         --version     : print version
 
     Options:
         REGEX         : filter files by a regular expression
+        EXCLUDE_VPS   : comma-separated VP set 'a,b,...' to exclude
         -d DIR        : create from/extract to directory
         -L            : convert filenames to lowercase
         -n            : no-op, dry-run
         -v            : verbose
         -vv           : verbose with extra info (very verbose)
         --debug       : print more on error
+    EOS
+  end
+
+  def ignore_vps_usage
+    cmd = File.basename($0)
+
+    <<~EOS
+    Usage: #{cmd} -D [EXCLUDE_PAKS]
+
+    -D
+        Finds duplicate file paths in VP packages of the current directory.
+        This is useful for finding conflicting files.
+
+    EXCLUDE_VPS
+        Comma-separated set of VPs to exclude, in the form 'a,b,...'.
+        The VPs in the set do not need to include the '.vp' extension.
+
+        A duplicate file prints only if there is at least one VP not
+        included in the EXCLUDE_VPS set.
+
+        Examples:
+          vp0.vp -> data/a.txt
+          vp1.vp -> data/a.txt
+          vp1.vp -> data/b.txt
+          vp2.vp -> data/b.txt
+          vp2.vp -> data/c.txt
+          vp3.vp -> data/c.txt
+
+          $ #{cmd} -D
+          data/a.txt: vp0.vp, vp1.vp
+          data/b.txt: vp1.vp, vp2.vp
+          data/c.txt: vp2.vp, vp3.vp
+
+          $ #{cmd} -D vp0
+          data/a.txt: vp0.vp, vp1.vp
+          data/b.txt: vp1.vp, vp2.vp
+          data/c.txt: vp2.vp, vp3.vp
+
+          $ #{cmd} -D vp0,vp1
+          data/b.txt: vp1.vp, vp2.vp
+          data/c.txt: vp2.vp, vp3.vp
+
+          $ #{cmd} -D vp1,vp2
+          data/a.txt: vp0.vp, vp1.vp
+          data/c.txt: vp2.vp, vp3.vp
+
+          $ #{cmd} -D vp0,vp1,vp2
+          data/c.txt: vp2.vp, vp3.vp
+
+          $ #{cmd} -D vp0,vp1,vp2,vp3
+          <no output>
     EOS
   end
 
@@ -259,6 +316,16 @@ class VP
       raise(usage) unless opts[:vp_path] = args[index + 1]
     end
 
+    if index = args.find_index("-D")
+      raise(usage) if opts[:command]
+      opts[:command] = :find_duplicates
+      if args[index + 1] == "help"
+        puts(ignore_vps_usage)
+        exit(0)
+      end
+      opts[:ignore_vps] = maybe_ignore_vps(args[index + 1])
+    end
+
     if index = args.find_index("-d")
       raise(usage) unless opts[:root_path] = args[index + 1]
     end
@@ -267,7 +334,13 @@ class VP
   end
 
   def maybe_regex(arg)
-    (arg && !arg.start_with?("-")) ? Regexp.new(arg) : nil
+    return nil if !arg || arg.start_with?("-")
+    Regexp.new(arg)
+  end
+
+  def maybe_ignore_vps(arg)
+    return [] if !arg || arg.start_with?("-")
+    arg.split(",").map { |vp| vp.end_with?(".vp") ? vp : "#{vp}.vp" }
   end
 
   def validate_options
@@ -840,6 +913,39 @@ class VP
     end
 
     puts(fmt_str % [total_size, total_files, files_string])
+  end
+
+
+  ######################################################################
+  # FIND DUPLICATES
+  ######################################################################
+
+  def find_duplicates
+    set_options(command: :find_duplicates)
+    vp_paths = Dir.glob("*.vp")
+
+    if vp_paths.size == 0
+      puts("No vp files found")
+      return
+    end
+
+    entries_hash = Hash.new
+    vp_paths.each do |vp_path|
+      open_vp(vp_path) do |vp_file|
+        each_vp_entry(vp_file) do |entry|
+          next if entry.is_dir
+          entry_path = entry.path.downcase
+          entries_hash[entry_path] ||= []
+          entries_hash[entry_path] << vp_path
+        end
+      end
+    end
+
+    entries_hash.each do |path, vp_list|
+      next unless vp_list.size > 1
+      next unless (vp_list - options[:ignore_vps]).size > 0
+      printf("%s: %s\n", path, vp_list.join(", "))
+    end
   end
 
 

@@ -139,4 +139,31 @@ class VPTest < Minitest::Test
 
     assert_output(expected, "") { vp.extract_vp() }
   end
+
+  def test_find_duplicates
+    vp = VP.new
+
+    expected = <<~EOS
+    data/a.txt: vp0.vp, vp1.vp
+    data/b.txt: vp1.vp, vp2.vp
+    data/c.txt: vp2.vp, vp3.vp
+    EOS
+
+    Dir.chdir("test_data/dups") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_given_ignore
+    vp = VP.new(ignore_vps: ["vp1.vp", "vp2.vp"])
+
+    expected = <<~EOS
+    data/a.txt: vp0.vp, vp1.vp
+    data/c.txt: vp2.vp, vp3.vp
+    EOS
+
+    Dir.chdir("test_data/dups") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
 end
