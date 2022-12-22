@@ -387,7 +387,7 @@ class VP
 
   def each_vp_entry(vp_file, &block)
     header = read_header(vp_file)
-    table = extract_table(vp_file, header.table_offset, header.num_entries)
+    table = extract_table(header, vp_file)
 
     table.each do |entry|
       yield(entry)
@@ -398,11 +398,7 @@ class VP
     vp_file.seek(8) # id(4) + version(4)
     table_offset = read_int(vp_file)
     num_entries = read_int(vp_file)
-
-    Header.new(
-      table_offset: table_offset,
-      num_entries: num_entries
-    )
+    Header.new(table_offset: table_offset, num_entries: num_entries)
   end
 
   def read_filename(file)
@@ -415,13 +411,13 @@ class VP
     file.read(4).unpack("V")[0]
   end
 
-  def extract_table(vp_file, table_offset, num_entries)
-    vp_file.seek(table_offset)
+  def extract_table(header, vp_file)
+    vp_file.seek(header.table_offset)
 
     table = []
     dir_path = []
 
-    (0...num_entries).each do |i|
+    (0...header.num_entries).each do |i|
       offset = read_int(vp_file)
       size = read_int(vp_file)
       filename = read_filename(vp_file)
@@ -544,16 +540,7 @@ class VP
   end
 
   def pipe_entry(entry, vp_file)
-    vp_file.seek(entry.offset)
-    chunk_size = 1024 * 1024
-    bytes_remaining = entry.size
-
-    while (bytes_remaining > 0)
-      read_size = [chunk_size, bytes_remaining].min()
-      bytes = vp_file.read(read_size)
-      written_size = $stdout.write(bytes)
-      bytes_remaining -= written_size
-    end
+    stream_entry(entry, vp_file, $stdout)
   end
 
 
@@ -600,7 +587,7 @@ class VP
               handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
               case handle_conflict_choice
               when :yes, :all
-                write_entry(vp_file, write_path, entry)
+                write_entry(entry, vp_file, write_path)
                 strings(:overwrite)
               else
                 strings(:skip)
@@ -609,7 +596,7 @@ class VP
               :file_path_has_file
             else
               mkdir_p(parent_path)
-              write_entry(vp_file, write_path, entry)
+              write_entry(entry, vp_file, write_path)
               strings(:extract)
             end
           end
@@ -643,22 +630,12 @@ class VP
     get_closest_file_in_path(parent)
   end
 
-  def write_entry(vp_file, write_path, entry)
+  def write_entry(entry, vp_file, file_path)
     return if noop?
-    vp_file.seek(entry.offset)
-    file = File.open(write_path, "wb")
-    chunk_size = 1024 * 1024
-    bytes_remaining = entry.size
-
-    while (bytes_remaining > 0)
-      read_size = [chunk_size, bytes_remaining].min()
-      bytes = vp_file.read(read_size)
-      written_size = file.write(bytes)
-      bytes_remaining -= written_size
+    File.open(file_path, "wb") do |file|
+      stream_entry(entry, vp_file, file)
     end
-
-    file.close()
-    File.utime(entry.timestamp, entry.timestamp, write_path)
+    File.utime(entry.timestamp, entry.timestamp, file_path)
   end
 
   def handle_conflict(path, previous_conflict_choice)
@@ -713,9 +690,10 @@ class VP
       validate_file_list(file_list)
 
       new_vp_file(vp_path_expanded) do |vp_file|
-        entries = archive_files(vp_file, file_list)
-        table_offset = archive_table(vp_file, entries)
-        archive_header(vp_file, table_offset, entries.size)
+        entries = archive_files(file_list, vp_file)
+        table_offset = archive_table(entries, vp_file)
+        header = Header.new(table_offset: table_offset, num_entries: entries.size)
+        archive_header(header, vp_file)
       end
     end
   end
@@ -729,19 +707,19 @@ class VP
     end
   end
 
-  def archive_header(vp_file, table_offset, num_entries)
+  def archive_header(header, vp_file)
     vp_file.seek(0)
-    header = [
+    header_data = [
       HEADER_ID,
       HEADER_VERSION,
-      table_offset,
-      num_entries
+      header.table_offset,
+      header.num_entries
     ]
-    packed_header = header.pack(HEADER_TEMPLATE)
-    vp_write(vp_file, packed_header)
+    packed_header = header_data.pack(HEADER_TEMPLATE)
+    vp_write(packed_header, vp_file)
   end
 
-  def archive_table(vp_file, entries)
+  def archive_table(entries, vp_file)
     table_offset = vp_file.tell()
 
     entries.each do |entry|
@@ -754,13 +732,13 @@ class VP
         entry.timestamp,
       ]
       packed_entry = entry_data.pack(ENTRY_TEMPLATE)
-      vp_write(vp_file, packed_entry)
+      vp_write(packed_entry, vp_file)
     end
 
     table_offset
   end
 
-  def archive_files(vp_file, file_list)
+  def archive_files(file_list, vp_file)
     vp_file.seek(HEADER_SIZE_BYTES)
     offset = vp_file.tell()
     entries = []
@@ -774,7 +752,7 @@ class VP
         entry.offset = offset
 
         unless entry.is_dir
-          archive_file(vp_file, entry)
+          archive_file(entry, vp_file)
           offset += entry.size
         end
 
@@ -788,14 +766,14 @@ class VP
     entries
   end
 
-  def archive_file(vp_file, entry)
+  def archive_file(entry, vp_file)
     File.open(entry.path, "rb") do |file|
       chunk_size = 1024 * 1024
 
       until file.eof?
         # read() does not read passed eof even when chunk_size > bytes_remaining
         bytes = file.read(chunk_size)
-        vp_write(vp_file, bytes)
+        vp_write(bytes, vp_file)
       end
     end
   end
@@ -969,9 +947,22 @@ class VP
     FileUtils.mkdir_p(path)
   end
 
-  def vp_write(vp_file, data)
+  def vp_write(data, vp_file)
     return 0 if noop?
     vp_file.write(data)
+  end
+
+  def stream_entry(entry, vp_file, io)
+    vp_file.seek(entry.offset)
+    chunk_size = 1024 * 1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = vp_file.read(read_size)
+      written_size = io.write(bytes)
+      bytes_remaining -= written_size
+    end
   end
 
   def format_timestamp(timestamp)
