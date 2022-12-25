@@ -148,9 +148,9 @@ class VPTest < Minitest::Test
     vp = VP.new
 
     expected = <<~EOS
-    data/a.txt: vp0.vp, vp1.vp
-    data/b.txt: vp1.vp, vp2.vp
-    data/c.txt: vp2.vp, vp3.vp
+    [override]   vp0.vp :: data/a.txt :: vp1.vp
+    [override]   vp1.vp :: data/b.txt :: vp2.vp
+    [override]   vp2.vp :: data/c.txt :: vp3.vp
     EOS
 
     Dir.chdir("test_data/dups") do
@@ -158,15 +158,114 @@ class VPTest < Minitest::Test
     end
   end
 
-  def test_find_duplicates_given_ignore
-    vp = VP.new(ignore_vps: ["vp1.vp", "vp2.vp"])
+  def test_find_duplicates_given_exclude
+    vp = VP.new(exclude_vps: ["vp1.vp", "vp2.vp"])
 
     expected = <<~EOS
-    data/a.txt: vp0.vp, vp1.vp
-    data/c.txt: vp2.vp, vp3.vp
+    [override]   vp0.vp :: data/a.txt :: vp1.vp
+    [override]   vp2.vp :: data/c.txt :: vp3.vp
     EOS
 
     Dir.chdir("test_data/dups") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_with_one_path_and_given_exclude
+    vp = VP.new(paths: ["dups"], exclude_vps: ["dups/vp1.vp", "dups/vp2.vp"])
+
+    expected = <<~EOS
+    [override]   dups/vp0.vp :: data/a.txt :: dups/vp1.vp
+    [override]   dups/vp2.vp :: data/c.txt :: dups/vp3.vp
+    EOS
+
+    Dir.chdir("test_data") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_with_multiple_paths
+    vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"])
+
+    expected = <<~EOS
+    [override]   mod1/vp1.vp :: data/a.txt :: mod2/vp2.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/b.txt :: mod2/vp2.vp
+    [override]   mod1/vp1.vp :: data/maps/c.dds :: mod2/vp2.vp, mod3/vp3.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/maps/one.dds :: mod2/vp2.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/other/one.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/test/one.dds :: mod4/vp4.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/two.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/test/two.dds :: mod4/vp4.vp
+    [shadow]     mod4/vp4.vp :: data/effects/abc.dds <> data/effects/other/abc.dds :: mod4/vp4.vp
+    EOS
+
+    Dir.chdir("test_data/dups_multi") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_multiple_paths_and_given_exclude
+    vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"], exclude_vps: ["mod1/vp1.vp", "mod2/vp2.vp"])
+
+    expected = <<~EOS
+    [override]   mod1/vp1.vp :: data/a.txt :: mod2/vp2.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/maps/c.dds :: mod2/vp2.vp, mod3/vp3.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/maps/one.dds :: mod2/vp2.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/other/one.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/test/one.dds :: mod4/vp4.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/two.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/test/two.dds :: mod4/vp4.vp
+    [shadow]     mod4/vp4.vp :: data/effects/abc.dds <> data/effects/other/abc.dds :: mod4/vp4.vp
+    EOS
+
+    Dir.chdir("test_data/dups_multi") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_regex
+    vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"], regex: /\.txt$/)
+
+    expected = <<~EOS
+    [override]   mod1/vp1.vp :: data/a.txt :: mod2/vp2.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/b.txt :: mod2/vp2.vp
+    EOS
+
+    Dir.chdir("test_data/dups_multi") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_regex_path_type
+    vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"], regex: Regexp.new("data/maps"))
+
+    expected = <<~EOS
+    [override]   mod1/vp1.vp :: data/maps/c.dds :: mod2/vp2.vp, mod3/vp3.vp, mod4/vp4.vp
+    [override]   mod1/vp1.vp :: data/maps/one.dds :: mod2/vp2.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/other/one.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/one.dds <> data/maps/test/one.dds :: mod4/vp4.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/two.dds :: mod3/vp3.vp
+    [shadow]     mod1/vp1.vp :: data/maps/other/two.dds <> data/maps/test/two.dds :: mod4/vp4.vp
+    EOS
+
+    Dir.chdir("test_data/dups_multi") do
+      assert_output(expected, "") { vp.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_checksum
+    vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"], checksum_duplicates: true)
+
+    expected = <<~EOS
+    [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
+    [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
+    [identical]  mod1/vp1.vp:data/maps/c.dds, mod2/vp2.vp:data/maps/c.dds, mod3/vp3.vp:data/maps/c.dds, mod4/vp4.vp:data/maps/c.dds
+    [identical]  mod1/vp1.vp:data/maps/one.dds, mod2/vp2.vp:data/maps/one.dds
+    [identical]  mod3/vp3.vp:data/maps/other/one.dds, mod4/vp4.vp:data/maps/test/one.dds
+    [identical]  mod1/vp1.vp:data/maps/other/two.dds, mod3/vp3.vp:data/maps/two.dds, mod4/vp4.vp:data/maps/test/two.dds
+    EOS
+
+    Dir.chdir("test_data/dups_multi") do
       assert_output(expected, "") { vp.find_duplicates() }
     end
   end

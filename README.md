@@ -36,49 +36,101 @@ See [*.VP on the FreeSpace Wiki](https://wiki.hard-light.net/index.php/*.VP).
 ## Usage
 
 ```
-Usage: vp -l VP_FILE [REGEX]        [-L]      [-v | -vv]
-       vp -x VP_FILE [REGEX] -d DIR [-L] [-n]
-       vp -p VP_FILE [REGEX]        [-L]
-       vp -c VP_FILE         -d DIR [-L] [-n] [-v | -vv]
-       vp -D [EXCLUDE_VPS]
+Usage: vp -l VP_FILE [-m REGEX]        [-L]      [-v | -vv]
+       vp -x VP_FILE [-m REGEX] -d DIR [-L] [-n]
+       vp -p VP_FILE [-m REGEX]        [-L]
+       vp -c VP_FILE            -d DIR [-L] [-n] [-v | -vv]
+       vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
 Commands:
-    -l VP_FILE    : list VP package files
-    -x VP_FILE    : extract VP package
-    -p VP_FILE    : extract VP package files to stdout (pipe)
-    -c VP_FILE    : create VP package
-    -D            : read VP packages and print duplicates
-    -D help       : print more details about -D usage
-    --help, -h    : print this message
-    --version     : print version
+    -l VP_FILE     : list VP package files
+    -x VP_FILE     : extract VP package
+    -p VP_FILE     : extract VP package files to stdout (pipe)
+    -c VP_FILE     : create VP package
+    -D             : read VP packages and print duplicates
+    -D help        : print more details about -D usage
+    --help, -h     : print this message
+    --version      : print version
 
 Options:
-    REGEX         : filter files by a regular expression
-    EXCLUDE_VPS   : comma-separated VP set 'a,b,...' to exclude
-    -d DIR        : create from/extract to directory
-    -L            : convert filenames to lowercase
-    -n            : no-op, dry-run
-    -v            : verbose
-    -vv           : verbose with extra info (very verbose)
-    --debug       : print more detailed error messages
+    -d DIR         : create from/extract to directory
+    -m REGEX       : regular expression used for matching file paths
+    -L             : convert filenames to lowercase
+    -n             : no-op, dry-run
+    -v             : verbose
+    -vv            : verbose with extra info (very verbose)
+    --debug        : more detailed error messages
 ```
 
 
 ## Usage: Find Duplicates
 
 ```
-Usage: vp -D [EXCLUDE_VPS]
+Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
--D
-    Finds duplicate file paths in VP packages of the current directory.
+-D [PATHS]
+    Find duplicates in VP packages based on FSO loading rules.
     This is useful for finding conflicting files.
+    Path Type:
+        A path starting from a 'data/' sub-directory.
+        For example: 'data/effects', 'data/maps'.
+    Duplicate Types:
+        "override" -> same path type, same filename, same sub-path.
+          "shadow" -> same path type, same filename, different sub-path.
 
-EXCLUDE_VPS
+    PATHS
+        Comma-separated list of paths to search for '.vp' files.
+        When PATHS is omitted, the current directory is searched for '.vp' files.
+        For example:
+            "-D" -> search current directory './'
+            "-D mod1" -> from current directory, search './mod1'
+            "-D mod1,mod2,mod3" -> search './mod1', './mod2', './mod3'
+            "-D mod1,mod2,." -> search './mod1', './mod2', './'
+              NOTE: './' is the current directory. Good for including FS2 retail vp files.
+
+    Output Column Labels:
+
+    [  Type  ]  Priority Mod ::      File       :: Overridden VP List
+    ----------  ------------    ---------------    -----------------------
+    [override]   mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
+    [override]   mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+
+
+    [  Type  ]  Priority Mod ::      File       <>      Shadowed By      :: Overridden VP List
+    ----------  ------------    ---------------    ---------------------    -------------------------
+    [shadow]     mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
+    [shadow]     mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+
+
+
+-m REGEX
+    A regular expression used for matching file paths.
+    For example:
+        "-m 'dds'" -> match names that include 'dds'
+        "-m '.dds$'" -> match names that end with '.dds'
+        "-m 'data/effects/.*'" -> match path type 'effects'
+        "-m mod1 '.dds$'" -> search './mod1', match names that include 'dds' extension
+        "-m mod1,mod2,mod3 'dds$'" -> search './mod1', './mod2', './mod3', match on 'dds'
+
+
+--checksum
+    Use CRC32 checksum-based file matching.
+    When a file matches on both 'path type' and 'filename',
+    duplicates are determined by their checksums.
+
+    Example Output:
+      [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
+      [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
+
+
+-e EXCLUDE_VPS
     Comma-separated set of VPs to exclude, in the form 'a,b,...'.
     The VPs in the set do not need to include the '.vp' extension.
 
-    A duplicate file prints only if there is at least one VP not
-    included in the EXCLUDE_VPS set.
+    A duplicate file prints only if there is at least one VP not included
+    in the EXCLUDE_VPS set. NOTE: There may be a duplicate file printed
+    with just the EXCLUDE_VPS set, because the total duplicate set may be
+    spread across multiple output lines of "override" and "shadow" types.
 
     Examples:
       vp0.vp -> data/a.txt
@@ -89,27 +141,27 @@ EXCLUDE_VPS
       vp3.vp -> data/c.txt
 
       $ vp -D
-      data/a.txt: vp0.vp, vp1.vp
-      data/b.txt: vp1.vp, vp2.vp
-      data/c.txt: vp2.vp, vp3.vp
+      [override]  vp0.vp :: data/a.txt :: vp1.vp
+      [override]  vp1.vp :: data/b.txt :: vp2.vp
+      [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-      $ vp -D vp0
-      data/a.txt: vp0.vp, vp1.vp
-      data/b.txt: vp1.vp, vp2.vp
-      data/c.txt: vp2.vp, vp3.vp
+      $ vp -D -e vp0
+      [override]  vp0.vp :: data/a.txt :: vp1.vp
+      [override]  vp1.vp :: data/b.txt :: vp2.vp
+      [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-      $ vp -D vp0,vp1
-      data/b.txt: vp1.vp, vp2.vp
-      data/c.txt: vp2.vp, vp3.vp
+      $ vp -D -e vp0,vp1
+      [override]  vp1.vp :: data/b.txt :: vp2.vp
+      [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-      $ vp -D vp1,vp2
-      data/a.txt: vp0.vp, vp1.vp
-      data/c.txt: vp2.vp, vp3.vp
+      $ vp -D -e vp1,vp2
+      [override]  vp0.vp :: data/a.txt :: vp1.vp
+      [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-      $ vp -D vp0,vp1,vp2
-      data/c.txt: vp2.vp, vp3.vp
+      $ vp -D -e vp0,vp1,vp2
+      [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-      $ vp -D vp0,vp1,vp2,vp3
+      $ vp -D -e vp0,vp1,vp2,vp3
       <no output>
 ```
 

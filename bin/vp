@@ -70,6 +70,8 @@ if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("3.0.0")
 end
 
 require "fileutils"
+require "pathname"
+require "zlib"
 
 class VP
   VERSION = "1.0.4"
@@ -121,7 +123,6 @@ class VP
     {
       command: nil,
       regex: nil,
-      ignore_vps: [],
       vp_path: nil,
       root_path: nil,
 
@@ -129,6 +130,11 @@ class VP
       noop: false,
       verbose: false,
       very_verbose: false,
+
+      # find duplicates
+      paths: nil,
+      exclude_vps: [],
+      checksum_duplicates: false,
     }
   end
 
@@ -137,7 +143,7 @@ class VP
   end
 
   def to_lower?
-    @options[:to_lower]
+    @options[:to_lower] || @options[:command] == :find_duplicates
   end
 
   def noop?
@@ -150,6 +156,10 @@ class VP
 
   def very_verbose?
     @options[:very_verbose]
+  end
+
+  def checksum_duplicates?
+    @options[:checksum_duplicates]
   end
 
   def run(args)
@@ -177,50 +187,102 @@ class VP
     <<~EOS
     #{cmd} version #{VERSION}
 
-    Usage: #{cmd} -l VP_FILE [REGEX]        [-L]      [-v | -vv]
-           #{cmd} -x VP_FILE [REGEX] -d DIR [-L] [-n]
-           #{cmd} -p VP_FILE [REGEX]        [-L]
-           #{cmd} -c VP_FILE         -d DIR [-L] [-n] [-v | -vv]
-           #{cmd} -D [EXCLUDE_VPS]
+    Usage: #{cmd} -l VP_FILE [-m REGEX]        [-L]      [-v | -vv]
+           #{cmd} -x VP_FILE [-m REGEX] -d DIR [-L] [-n]
+           #{cmd} -p VP_FILE [-m REGEX]        [-L]
+           #{cmd} -c VP_FILE            -d DIR [-L] [-n] [-v | -vv]
+           #{cmd} -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
     Commands:
-        -l VP_FILE    : list VP package files
-        -x VP_FILE    : extract VP package
-        -p VP_FILE    : extract VP package files to stdout (pipe)
-        -c VP_FILE    : create VP package
-        -D            : read VP packages and print duplicates
-        -D help       : print more details about -D usage
-        --help, -h    : print this message
-        --version     : print version
+        -l VP_FILE     : list VP package files
+        -x VP_FILE     : extract VP package
+        -p VP_FILE     : extract VP package files to stdout (pipe)
+        -c VP_FILE     : create VP package
+        -D             : read VP packages and print duplicates
+        -D help        : print more details about -D usage
+        --help, -h     : print this message
+        --version      : print version
 
     Options:
-        REGEX         : filter files by a regular expression
-        EXCLUDE_VPS   : comma-separated VP set 'a,b,...' to exclude
-        -d DIR        : create from/extract to directory
-        -L            : convert filenames to lowercase
-        -n            : no-op, dry-run
-        -v            : verbose
-        -vv           : verbose with extra info (very verbose)
-        --debug       : print more detailed error messages
+        -d DIR         : create from/extract to directory
+        -m REGEX       : regular expression used for matching file paths
+        -L             : convert filenames to lowercase
+        -n             : no-op, dry-run
+        -v             : verbose
+        -vv            : verbose with extra info (very verbose)
+        --debug        : more detailed error messages
     EOS
   end
 
-  def ignore_vps_usage
+  def find_duplicates_usage
     cmd = File.basename($0)
 
     <<~EOS
-    Usage: #{cmd} -D [EXCLUDE_VPS]
+    Usage: #{cmd} -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
-    -D
-        Finds duplicate file paths in VP packages of the current directory.
+    -D [PATHS]
+        Find duplicates in VP packages based on FSO loading rules.
         This is useful for finding conflicting files.
+        Path Type:
+            A path starting from a 'data/' sub-directory.
+            For example: 'data/effects', 'data/maps'.
+        Duplicate Types:
+            "override" -> same path type, same filename, same sub-path.
+              "shadow" -> same path type, same filename, different sub-path.
 
-    EXCLUDE_VPS
+        PATHS
+            Comma-separated list of paths to search for '.vp' files.
+            When PATHS is omitted, the current directory is searched for '.vp' files.
+            For example:
+                "-D" -> search current directory './'
+                "-D mod1" -> from current directory, search './mod1'
+                "-D mod1,mod2,mod3" -> search './mod1', './mod2', './mod3'
+                "-D mod1,mod2,." -> search './mod1', './mod2', './'
+                  NOTE: './' is the current directory. Good for including FS2 retail vp files.
+
+        Output Column Labels:
+
+        [  Type  ]  Priority Mod ::      File       :: Overridden VP List
+        ----------  ------------    ---------------    -----------------------
+        [override]   mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
+        [override]   mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+
+
+        [  Type  ]  Priority Mod ::      File       <>      Shadowed By      :: Overridden VP List
+        ----------  ------------    ---------------    ---------------------    -------------------------
+        [shadow]     mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
+        [shadow]     mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+
+
+
+    -m REGEX
+        A regular expression used for matching file paths.
+        For example:
+            "-m 'dds'" -> match names that include 'dds'
+            "-m '\.dds$'" -> match names that end with '.dds'
+            "-m 'data/effects/.*'" -> match path type 'effects'
+            "-m mod1 '\.dds$'" -> search './mod1', match names that include 'dds' extension
+            "-m mod1,mod2,mod3 'dds$'" -> search './mod1', './mod2', './mod3', match on 'dds'
+
+
+    --checksum
+        Use CRC32 checksum-based file matching.
+        When a file matches on both 'path type' and 'filename',
+        duplicates are determined by their checksums.
+
+        Example Output:
+          [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
+          [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
+
+
+    -e EXCLUDE_VPS
         Comma-separated set of VPs to exclude, in the form 'a,b,...'.
         The VPs in the set do not need to include the '.vp' extension.
 
-        A duplicate file prints only if there is at least one VP not
-        included in the EXCLUDE_VPS set.
+        A duplicate file prints only if there is at least one VP not included
+        in the EXCLUDE_VPS set. NOTE: There may be a duplicate file printed
+        with just the EXCLUDE_VPS set, because the total duplicate set may be
+        spread across multiple output lines of "override" and "shadow" types.
 
         Examples:
           vp0.vp -> data/a.txt
@@ -231,103 +293,82 @@ class VP
           vp3.vp -> data/c.txt
 
           $ #{cmd} -D
-          data/a.txt: vp0.vp, vp1.vp
-          data/b.txt: vp1.vp, vp2.vp
-          data/c.txt: vp2.vp, vp3.vp
+          [override]  vp0.vp :: data/a.txt :: vp1.vp
+          [override]  vp1.vp :: data/b.txt :: vp2.vp
+          [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-          $ #{cmd} -D vp0
-          data/a.txt: vp0.vp, vp1.vp
-          data/b.txt: vp1.vp, vp2.vp
-          data/c.txt: vp2.vp, vp3.vp
+          $ #{cmd} -D -e vp0
+          [override]  vp0.vp :: data/a.txt :: vp1.vp
+          [override]  vp1.vp :: data/b.txt :: vp2.vp
+          [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-          $ #{cmd} -D vp0,vp1
-          data/b.txt: vp1.vp, vp2.vp
-          data/c.txt: vp2.vp, vp3.vp
+          $ #{cmd} -D -e vp0,vp1
+          [override]  vp1.vp :: data/b.txt :: vp2.vp
+          [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-          $ #{cmd} -D vp1,vp2
-          data/a.txt: vp0.vp, vp1.vp
-          data/c.txt: vp2.vp, vp3.vp
+          $ #{cmd} -D -e vp1,vp2
+          [override]  vp0.vp :: data/a.txt :: vp1.vp
+          [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-          $ #{cmd} -D vp0,vp1,vp2
-          data/c.txt: vp2.vp, vp3.vp
+          $ #{cmd} -D -e vp0,vp1,vp2
+          [override]  vp2.vp :: data/c.txt :: vp3.vp
 
-          $ #{cmd} -D vp0,vp1,vp2,vp3
+          $ #{cmd} -D -e vp0,vp1,vp2,vp3
           <no output>
     EOS
   end
 
   def process_args(args)
     opts = {}
-
-    if args.size < 1
-      raise(usage)
-    end
+    raise(usage) if args.size < 1
 
     if args.include?("-h") || args.include?("--help")
       puts(usage)
       exit(0)
     end
-
     if args.include?("--version")
       puts(VERSION)
       exit(0)
     end
 
-    if args.include?("-L")
-      opts[:to_lower] = true
+    opts[:to_lower]            = args.include?("-L")
+    opts[:noop]                = args.include?("-n")
+    opts[:verbose]             = args.include?("-v")
+    opts[:very_verbose]        = args.include?("-vv")
+    opts[:checksum_duplicates] = args.include?("--checksum")
+
+    if index = args.find_index("-m")
+      opts[:regex] = maybe_regex(args[index + 1])
+    end
+    if index = args.find_index("-e")
+      opts[:exclude_vps] = maybe_exclude_vps(args[index + 1])
+    end
+    if index = args.find_index("-d")
+      raise(usage) unless opts[:root_path] = args[index + 1]
     end
 
-    if args.include?("-n")
-      opts[:noop] = true
-    end
-
-    if args.include?("-v")
-      opts[:verbose] = true
-    end
-
-    if args.include?("-vv")
-      opts[:very_verbose] = true
-    end
-
-    if index = args.find_index("-l")
-      raise(usage) if opts[:command]
-      opts[:command] = :list
-      raise(usage) unless opts[:vp_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-x")
-      raise(usage) if opts[:command]
-      opts[:command] = :extract
-      raise(usage) unless opts[:vp_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-p")
-      raise(usage) if opts[:command]
-      opts[:command] = :pipe_extract
-      raise(usage) unless opts[:vp_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-c")
-      raise(usage) if opts[:command]
-      opts[:command] = :create
-      raise(usage) unless opts[:vp_path] = args[index + 1]
+    ["-l", "-x", "-p", "-c"].each do |cmd|
+      if index = args.find_index(cmd)
+        raise(usage) if opts[:command]
+        opts[:command] =
+          case cmd
+          when "-l" then :list
+          when "-x" then :extract
+          when "-p" then :pipe_extract
+          when "-c" then :create
+          end
+        raise(usage) unless opts[:vp_path] = args[index + 1]
+      end
     end
 
     if index = args.find_index("-D")
       raise(usage) if opts[:command]
       opts[:command] = :find_duplicates
       if args[index + 1] == "help"
-        puts(ignore_vps_usage)
+        puts(find_duplicates_usage)
         exit(0)
       end
-      opts[:ignore_vps] = maybe_ignore_vps(args[index + 1])
-    end
-
-    if index = args.find_index("-d")
-      raise(usage) unless opts[:root_path] = args[index + 1]
+      opts[:paths] = maybe_paths(args[index + 1])
     end
 
     opts
@@ -338,9 +379,14 @@ class VP
     Regexp.new(arg)
   end
 
-  def maybe_ignore_vps(arg)
+  def maybe_exclude_vps(arg)
     return [] if !arg || arg.start_with?("-")
     arg.split(",").map { |vp| vp.end_with?(".vp") ? vp : "#{vp}.vp" }
+  end
+
+  def maybe_paths(arg)
+    return nil if !arg || arg.start_with?("-")
+    arg.split(",")
   end
 
   def validate_options
@@ -540,7 +586,7 @@ class VP
   end
 
   def pipe_entry(entry, vp_file)
-    stream_entry(entry, vp_file, $stdout)
+    stream_entry(entry, vp_file) { |bytes| $stdout.write(bytes) }
   end
 
 
@@ -633,7 +679,7 @@ class VP
   def write_entry(entry, vp_file, file_path)
     return if noop?
     File.open(file_path, "wb") do |file|
-      stream_entry(entry, vp_file, file)
+      stream_entry(entry, vp_file) { |bytes| file.write(bytes) }
     end
     File.utime(entry.timestamp, entry.timestamp, file_path)
   end
@@ -900,30 +946,134 @@ class VP
 
   def find_duplicates
     set_options(command: :find_duplicates)
-    vp_paths = Dir.glob("*.vp")
+    vp_paths =
+      if options[:paths]
+        options[:paths].map do |path|
+          raise("Directory not found: #{path}") unless File.directory?(path)
+          Dir.glob(File.join(path, "*.vp"), sort: true)
+        end.flatten()
+      else
+        Dir.glob("*.vp", sort: true)
+      end
 
     if vp_paths.size == 0
       puts("No vp files found")
       return
     end
 
-    entries_hash = Hash.new
+    max_vp_path_length = 0
+    duplicates = Hash.new
     vp_paths.each do |vp_path|
       open_vp(vp_path) do |vp_file|
         each_vp_entry(vp_file) do |entry|
           next if entry.is_dir
-          entry_path = entry.path.downcase
-          entries_hash[entry_path] ||= []
-          entries_hash[entry_path] << vp_path
+          path_type = get_path_type(entry.path)
+          # FSO loads file by path type and filename
+          key = [path_type, entry.name]
+          duplicates[key] ||= []
+          duplicates[key] << [vp_path, entry]
+          max_vp_path_length = vp_path.length if vp_path.length > max_vp_path_length
         end
       end
     end
 
-    entries_hash.each do |path, vp_list|
-      next unless vp_list.size > 1
-      next unless (vp_list - options[:ignore_vps]).size > 0
-      printf("%s: %s\n", path, vp_list.join(", "))
+    duplicates.each do |key, duplicate_entries|
+      next unless duplicate_entries.size > 1 # at least one duplicate
+      vps = duplicate_entries.map(&:first)
+      next unless (vps - options[:exclude_vps]).size > 0 # at least one not excluded
+
+      if checksum_duplicates?
+        match_duplicates_by_checksum(key, duplicate_entries)
+      else
+        match_duplicates_by_load_order(duplicate_entries, max_vp_path_length)
+      end
     end
+  end
+
+  def match_duplicates_by_checksum(entries_key, duplicate_entries)
+    size_matches = Hash.new
+    duplicate_entries.each do |vp_path, entry|
+      size_key = entries_key + [entry.size]
+      size_matches[size_key] ||= []
+      size_matches[size_key] << [vp_path, entry]
+    end
+
+    entries_by_vp = Hash.new
+    size_matches.each do |key, entries|
+      next unless entries.size > 1
+      entries.each do |vp_path, entry|
+        entries_by_vp[vp_path] ||= []
+        entries_by_vp[vp_path] << entry
+      end
+    end
+
+    checksum_matches = Hash.new
+    entries_by_vp.each do |vp_path, entries|
+      open_vp(vp_path) do |vp_file|
+        entries.each do |entry|
+          crc = 0
+          stream_entry(entry, vp_file) { |bytes| crc = Zlib.crc32(bytes, crc) }
+          key = [entry.name, crc]
+          checksum_matches[key] ||= []
+          checksum_matches[key] << [vp_path, entry]
+        end
+      end
+    end
+
+    identical_fmt  = "[identical]  %s\n"
+    checksum_matches.each do |_, entries|
+      next unless entries.size > 1
+      printf(identical_fmt, entries.map { |vp, e| [vp, e.path].join(":") }.join(", "))
+    end
+  end
+
+  def match_duplicates_by_load_order(duplicate_entries, max_vp_path_length = 20)
+    first_vp_path       = duplicate_entries[0][0]
+    first_entry_path    = duplicate_entries[0][1].path
+    ordered_entry_paths = duplicate_entries.map { |_, e| e.path }.uniq()
+    overridden_fmt      = "[override]   %#{max_vp_path_length}s :: %s :: %s\n"
+    shadowed_fmt        = "[shadow]     %#{max_vp_path_length}s :: %s <> %s :: %s\n"
+
+    matches = Hash.new
+    duplicate_entries.each do |vp_path, entry|
+      matches[entry.path] ||= []
+      matches[entry.path] << vp_path
+    end
+
+    ordered_entry_paths.each do |entry_path|
+      if entry_path == first_entry_path
+        vp_list = matches[entry_path] - [first_vp_path]
+        next unless vp_list.size > 0
+        printf(overridden_fmt, first_vp_path, first_entry_path, vp_list.join(", "))
+      else # sub-path differs
+        vp_list = matches[entry_path]
+        next unless vp_list.size > 0
+        printf(shadowed_fmt, first_vp_path, first_entry_path, entry_path, vp_list.join(", "))
+      end
+    end
+  end
+
+  # See https://github.com/scp-fs2open/fs2open.github.com/blob/master/code/cfile/cfile.cpp
+  def get_path_type(path)
+    parts = Pathname(path).each_filename().to_a()
+    return ""     unless parts[0] == "data"
+    return "data"     if parts[0] == "data" && parts[1] == parts.last
+    special_path = File.join(parts[0], parts[1], parts[2])
+    @special_paths ||= [
+      "data/voice/briefing",
+      "data/voice/command_briefings",
+      "data/voice/debriefing",
+      "data/voice/personas",
+      "data/voice/special",
+      "data/voice/training",
+      "data/players/images",
+      "data/players/squads",
+      "data/players/single",
+      "data/players/multi",
+      "data/players/presets",
+    ].map { |p| File.join(p.split("/")) }
+    return special_path if @special_paths.include?(special_path)
+    return File.join(parts[0], parts[1])
   end
 
 
@@ -952,7 +1102,7 @@ class VP
     vp_file.write(data)
   end
 
-  def stream_entry(entry, vp_file, io)
+  def stream_entry(entry, vp_file, &block)
     vp_file.seek(entry.offset)
     chunk_size = 1024 * 1024
     bytes_remaining = entry.size
@@ -960,8 +1110,8 @@ class VP
     while (bytes_remaining > 0)
       read_size = [chunk_size, bytes_remaining].min()
       bytes = vp_file.read(read_size)
-      written_size = io.write(bytes)
-      bytes_remaining -= written_size
+      yield(bytes)
+      bytes_remaining -= bytes.size
     end
   end
 
