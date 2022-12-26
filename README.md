@@ -91,7 +91,7 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
     Output Column Labels:
 
     [  Type  ]  Priority Mod ::      File       :: Overridden VP List
-    ----------  ------------    ---------------    -----------------------
+    ----------  ------------    ---------------    -------------------------
     [override]   mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
     [override]   mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
 
@@ -109,8 +109,6 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
         "-m 'dds'" -> match names that include 'dds'
         "-m '.dds$'" -> match names that end with '.dds'
         "-m 'data/effects/.*'" -> match path type 'effects'
-        "-m mod1 '.dds$'" -> search './mod1', match names that include 'dds' extension
-        "-m mod1,mod2,mod3 'dds$'" -> search './mod1', './mod2', './mod3', match on 'dds'
 
 
 --checksum
