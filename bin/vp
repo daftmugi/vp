@@ -74,7 +74,7 @@ require "pathname"
 require "zlib"
 
 class VP
-  VERSION = "1.0.4"
+  VERSION = "1.1.0"
 
   MAX_VP_SIZE = 2**32-1 # 32-bit unsigned int
   MAX_ENTRIES = 2**32-1 # 32-bit unsigned int

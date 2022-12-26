@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.1.0
+
+* Use '-m' for REGEX matching.
+* Improve '-D' find duplicates.
+    - Now, based on FSO load order.
+    - Print "override" and "shadow" files.
+    - Add '--checksum' flag for finding identical files.
+    - Add REGEX matching.
+
+
 ## v1.0.4
 
 * Some code improvements.
