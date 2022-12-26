@@ -242,16 +242,16 @@ class VP
 
         Output Column Labels:
 
-        [  Type  ]  Priority Mod ::      File       :: Overridden VP List
-        ----------  ------------    ---------------    -------------------------
-        [override]   mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
-        [override]   mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+           Type     Priority VP ::      File       :: List of Overridden VP
+        ----------  -----------    ---------------    -------------------------
+        [override]  mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
+        [override]  mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
 
 
-        [  Type  ]  Priority Mod ::      File       <>      Shadowed By      :: Overridden VP List
-        ----------  ------------    ---------------    ---------------------    -------------------------
-        [shadow]     mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
-        [shadow]     mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+           Type     Priority VP ::      File       <>      Shadowed By      :: List of Overridden VP
+        ----------  -----------    ---------------    ---------------------    -------------------------
+        [shadow]    mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
+        [shadow]    mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
 
 
 
@@ -268,9 +268,12 @@ class VP
         When a file matches on both 'path type' and 'filename',
         duplicates are determined by their checksums.
 
-        Example Output:
-          [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
-          [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
+        Output Column Labels:
+
+            Type      Priority File :: List of Overridden VP[:Shadow File Path]
+        ------------  -------------    -----------------------------------------
+        [identical]      data/a.txt :: mod1/vp1.vp, mod4/vp4.vp
+        [identical]      data/b.txt :: mod1/vp1.vp, mod2/vp2.vp:data/other/b.txt
 
 
     -e EXCLUDE_VPS
@@ -1018,35 +1021,39 @@ class VP
       end
     end
 
-    identical_fmt  = "[identical]  %s\n"
+    identical_fmt  = "[identical]  %s :: %s\n"
     checksum_matches.each do |_, entries|
       next unless entries.size > 1
-      printf(identical_fmt, entries.map { |vp, e| [vp, e.path].join(":") }.join(", "))
+      priority_entry_path = entries[0][1].path
+      formatted_entries = entries.map do |vp_path, entry|
+        entry.path == priority_entry_path ? vp_path : [vp_path, entry.path].join(":")
+      end.join(", ")
+      printf(identical_fmt, priority_entry_path, formatted_entries)
     end
   end
 
   def match_duplicates_by_load_order(duplicate_entries, max_vp_path_length = 20)
-    first_vp_path       = duplicate_entries[0][0]
-    first_entry_path    = duplicate_entries[0][1].path
-    ordered_entry_paths = duplicate_entries.map { |_, e| e.path }.uniq()
-    overridden_fmt      = "[override]   %#{max_vp_path_length}s :: %s :: %s\n"
-    shadowed_fmt        = "[shadow]     %#{max_vp_path_length}s :: %s <> %s :: %s\n"
-
     matches = Hash.new
     duplicate_entries.each do |vp_path, entry|
       matches[entry.path] ||= []
       matches[entry.path] << vp_path
     end
 
+    priority_vp         = duplicate_entries[0][0]
+    priority_path       = duplicate_entries[0][1].path
+    ordered_entry_paths = duplicate_entries.map { |_, e| e.path }.uniq()
+    override_fmt        = "[override]   %#{max_vp_path_length}s :: %s :: %s\n"
+    shadow_fmt          = "[shadow]     %#{max_vp_path_length}s :: %s <> %s :: %s\n"
+
     ordered_entry_paths.each do |entry_path|
-      if entry_path == first_entry_path
-        vp_list = matches[entry_path] - [first_vp_path]
+      if entry_path == priority_path
+        vp_list = matches[entry_path] - [priority_vp]
         next unless vp_list.size > 0
-        printf(overridden_fmt, first_vp_path, first_entry_path, vp_list.join(", "))
+        printf(override_fmt, priority_vp, priority_path, vp_list.join(", "))
       else # sub-path differs
         vp_list = matches[entry_path]
         next unless vp_list.size > 0
-        printf(shadowed_fmt, first_vp_path, first_entry_path, entry_path, vp_list.join(", "))
+        printf(shadow_fmt, priority_vp, priority_path, entry_path, vp_list.join(", "))
       end
     end
   end

@@ -90,16 +90,16 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
     Output Column Labels:
 
-    [  Type  ]  Priority Mod ::      File       :: Overridden VP List
-    ----------  ------------    ---------------    -------------------------
-    [override]   mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
-    [override]   mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+       Type     Priority VP ::      File       :: List of Overridden VP
+    ----------  -----------    ---------------    -------------------------
+    [override]  mod1/vp1.vp :: data/maps/a.dds :: mod2/vp2.vp
+    [override]  mod1/vp1.vp :: data/maps/b.dds :: mod2/vp2.vp, mods4/vp4.vp
 
 
-    [  Type  ]  Priority Mod ::      File       <>      Shadowed By      :: Overridden VP List
-    ----------  ------------    ---------------    ---------------------    -------------------------
-    [shadow]     mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
-    [shadow]     mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
+       Type     Priority VP ::      File       <>      Shadowed By      :: List of Overridden VP
+    ----------  -----------    ---------------    ---------------------    -------------------------
+    [shadow]    mod1/vp1.vp :: data/maps/a.dds <> data/maps/other/a.dds :: mod2/vp2.vp
+    [shadow]    mod1/vp1.vp :: data/maps/b.dds <> data/maps/other/b.dds :: mod2/vp2.vp, mods4/vp4.vp
 
 
 
@@ -116,9 +116,12 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
     When a file matches on both 'path type' and 'filename',
     duplicates are determined by their checksums.
 
-    Example Output:
-      [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
-      [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
+    Output Column Labels:
+
+        Type      Priority File :: List of Overridden VP[:Shadow File Path]
+    ------------  -------------    -----------------------------------------
+    [identical]      data/a.txt :: mod1/vp1.vp, mod4/vp4.vp
+    [identical]      data/b.txt :: mod1/vp1.vp, mod2/vp2.vp:data/other/b.txt
 
 
 -e EXCLUDE_VPS

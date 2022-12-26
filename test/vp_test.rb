@@ -257,12 +257,12 @@ class VPTest < Minitest::Test
     vp = VP.new(paths: ["mod1", "mod2", "mod3", "mod4"], checksum_duplicates: true)
 
     expected = <<~EOS
-    [identical]  mod1/vp1.vp:data/a.txt, mod4/vp4.vp:data/a.txt
-    [identical]  mod1/vp1.vp:data/b.txt, mod2/vp2.vp:data/b.txt
-    [identical]  mod1/vp1.vp:data/maps/c.dds, mod2/vp2.vp:data/maps/c.dds, mod3/vp3.vp:data/maps/c.dds, mod4/vp4.vp:data/maps/c.dds
-    [identical]  mod1/vp1.vp:data/maps/one.dds, mod2/vp2.vp:data/maps/one.dds
-    [identical]  mod3/vp3.vp:data/maps/other/one.dds, mod4/vp4.vp:data/maps/test/one.dds
-    [identical]  mod1/vp1.vp:data/maps/other/two.dds, mod3/vp3.vp:data/maps/two.dds, mod4/vp4.vp:data/maps/test/two.dds
+    [identical]  data/a.txt :: mod1/vp1.vp, mod4/vp4.vp
+    [identical]  data/b.txt :: mod1/vp1.vp, mod2/vp2.vp
+    [identical]  data/maps/c.dds :: mod1/vp1.vp, mod2/vp2.vp, mod3/vp3.vp, mod4/vp4.vp
+    [identical]  data/maps/one.dds :: mod1/vp1.vp, mod2/vp2.vp
+    [identical]  data/maps/other/one.dds :: mod3/vp3.vp, mod4/vp4.vp:data/maps/test/one.dds
+    [identical]  data/maps/other/two.dds :: mod1/vp1.vp, mod3/vp3.vp:data/maps/two.dds, mod4/vp4.vp:data/maps/test/two.dds
     EOS
 
     Dir.chdir("test_data/dups_multi") do
