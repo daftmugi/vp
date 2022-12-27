@@ -53,8 +53,8 @@ Commands:
     --version      : print version
 
 Options:
+    -m REGEX       : match file paths by a regular expression
     -d DIR         : create from/extract to directory
-    -m REGEX       : regular expression used for matching file paths
     -L             : convert filenames to lowercase
     -n             : no-op, dry-run
     -v             : verbose
@@ -104,7 +104,7 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
 
 -m REGEX
-    A regular expression used for matching file paths.
+    Match file paths by a regular expression.
     For example:
         "-m 'dds'" -> match names that include 'dds'
         "-m '.dds$'" -> match names that end with '.dds'

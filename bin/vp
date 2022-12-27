@@ -204,8 +204,8 @@ class VP
         --version      : print version
 
     Options:
+        -m REGEX       : match file paths by a regular expression
         -d DIR         : create from/extract to directory
-        -m REGEX       : regular expression used for matching file paths
         -L             : convert filenames to lowercase
         -n             : no-op, dry-run
         -v             : verbose
@@ -256,7 +256,7 @@ class VP
 
 
     -m REGEX
-        A regular expression used for matching file paths.
+        Match file paths by a regular expression.
         For example:
             "-m 'dds'" -> match names that include 'dds'
             "-m '\.dds$'" -> match names that end with '.dds'
@@ -1000,7 +1000,7 @@ class VP
     end
 
     entries_by_vp = Hash.new
-    size_matches.each do |key, entries|
+    size_matches.each do |_, entries|
       next unless entries.size > 1
       entries.each do |vp_path, entry|
         entries_by_vp[vp_path] ||= []
@@ -1116,7 +1116,7 @@ class VP
       read_size = [chunk_size, bytes_remaining].min()
       bytes = vp_file.read(read_size)
       yield(bytes)
-      bytes_remaining -= bytes.size
+      bytes_remaining -= read_size
     end
   end
 
