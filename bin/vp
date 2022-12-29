@@ -434,7 +434,7 @@ class VP
 
   def each_vp_entry(vp_file, &block)
     header = read_header(vp_file)
-    table = extract_table(header, vp_file)
+    table = read_table(header, vp_file)
 
     table.each do |entry|
       yield(entry)
@@ -458,7 +458,7 @@ class VP
     file.read(4).unpack("V")[0]
   end
 
-  def extract_table(header, vp_file)
+  def read_table(header, vp_file)
     vp_file.seek(header.table_offset)
 
     table = []
@@ -717,32 +717,28 @@ class VP
   # CREATE
   ######################################################################
 
-  def create_vp
+  def create_vp(io = nil)
     set_options(command: :create)
     validate_options()
 
-    vp_path = options[:vp_path]
-    vp_path_expanded = File.expand_path(options[:vp_path])
     root_path = options[:root_path]
-
     raise("Invalid source directory: ''")              if root_path.empty?
-    raise("File already exists: #{vp_path}")           if File.exist?(vp_path)
     raise("Not a directory: #{root_path}")             if File.file?(root_path)
     raise("Directory not found: #{root_path}")     unless File.directory?(root_path)
     raise("Source directory must be named 'data'") unless File.basename(root_path) == "data"
 
-    dirname = File.dirname(options[:root_path])
+    io ||= new_vp_file(options[:vp_path])
+    dirname = File.dirname(root_path)
     Dir.chdir(dirname) do
       file_list = data_file_list()
       validate_file_list(file_list)
 
-      new_vp_file(vp_path_expanded) do |vp_file|
-        entries = archive_files(file_list, vp_file)
-        table_offset = archive_table(entries, vp_file)
-        header = Header.new(table_offset: table_offset, num_entries: entries.size)
-        archive_header(header, vp_file)
-      end
+      entries = archive_files(file_list, io)
+      table_offset = archive_table(entries, io)
+      header = Header.new(table_offset: table_offset, num_entries: entries.size)
+      archive_header(header, io)
     end
+    io.close()
   end
 
   def new_vp_file(path, &block)
@@ -750,6 +746,7 @@ class VP
       require "stringio"
       StringIO.open("", "wb", &block)
     else
+      raise("File already exists: #{path}") if File.exist?(path)
       File.open(path, "wb", &block)
     end
   end
@@ -770,12 +767,10 @@ class VP
     table_offset = vp_file.tell()
 
     entries.each do |entry|
-      entry_name = to_lower? ? entry.name.downcase() : entry.name
-
       entry_data = [
         entry.offset,
         entry.size,
-        entry_name.encode("ascii"),
+        entry.name.encode("ascii"),
         entry.timestamp,
       ]
       packed_entry = entry_data.pack(ENTRY_TEMPLATE)
@@ -793,19 +788,18 @@ class VP
     print_create_header()
 
     file_list.each do |entry|
-      if entry.skip?
-        print_create_entry(entry)
-      else
+      unless entry.skip?
         entry.offset = offset
-
         unless entry.is_dir
           archive_file(entry, vp_file)
           offset += entry.size
         end
-
-        print_create_entry(entry)
         entries << entry
       end
+
+      entry.name = entry.name.downcase if to_lower?
+      entry.path = entry.path.downcase if to_lower?
+      print_create_entry(entry)
     end
 
     print_create_footer(entries)
@@ -889,8 +883,7 @@ class VP
   def print_create_entry(entry)
     return if entry.name == ".."
     action = entry.skip? ? :skip : :archive
-    entry_path = to_lower? ? entry.path.downcase() : entry.path
-    entry_path = format_path(entry_path, entry.is_dir)
+    entry_path = format_path(entry.path, entry.is_dir)
 
     if verbose?
       entry_data = [strings(action)]

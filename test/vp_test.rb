@@ -97,6 +97,30 @@ class VPTest < Minitest::Test
     assert_output(expected, "") { vp.create_vp() }
   end
 
+  def test_create_to_lower
+    root_path = "test_data/vp_uppercase/data"
+    vp_write = VP.new(vp_path: "testout.vp", root_path: root_path, to_lower: true)
+
+    expected = <<~EOS
+    archived  data/
+    archived  data/a.txt
+    archived  data/b.txt
+    archived  data/c.txt
+    EOS
+
+    io_write = StringIO.new
+    assert_output(expected, "") { vp_write.create_vp(io_write) }
+
+    io_read = StringIO.new(io_write.string)
+    vp_read = VP.new
+    header = vp_read.read_header(io_read)
+    table = vp_read.read_table(header, io_read)
+
+    expected_paths = ["data", "data/a.txt", "data/b.txt", "data/c.txt"]
+    paths = table.map(&:path)
+    assert_equal(expected_paths, paths)
+  end
+
   def test_data_file_list
     vp = VP.new(vp_path: "testout.vp", root_path: "test_data/data", noop: true)
 
