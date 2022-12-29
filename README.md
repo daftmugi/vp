@@ -107,7 +107,7 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
     Match file paths by a regular expression.
     For example:
         "-m 'dds'" -> match names that include 'dds'
-        "-m '.dds$'" -> match names that end with '.dds'
+        "-m '\.dds$'" -> match names that end with '.dds'
         "-m 'data/effects/.*'" -> match path type 'effects'
 
 
