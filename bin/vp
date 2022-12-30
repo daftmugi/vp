@@ -835,7 +835,8 @@ class VP
     end
   end
 
-  def clean_filename(filename)
+  def clean_filename(path, filename)
+    ensure_one_filename_case(File.join(path, filename))
     max_length = ENTRY_NAME_LENGTH - 1 # minus null terminator
 
     if filename.length > max_length
@@ -847,6 +848,13 @@ class VP
     rescue
       raise("Filename not ASCII compatible: #{filename}")
     end
+  end
+
+  def ensure_one_filename_case(path)
+    @added_file_paths ||= Hash.new
+    match = @added_file_paths[path.downcase]
+    raise("Cannot add: #{path}. Already exists as: #{match}.") if match
+    @added_file_paths[path.downcase] = path
   end
 
   def data_file_list
@@ -865,7 +873,7 @@ class VP
     list << Entry.new(name: name, path: path, is_dir: true)
 
     Dir.children(path).sort().each do |filename|
-      filename = clean_filename(filename)
+      filename = clean_filename(path, filename)
       file_path = File.join(path, filename)
       list = get_file_list(list, filename, file_path)
     end

@@ -121,6 +121,19 @@ class VPTest < Minitest::Test
     assert_equal(expected_paths, paths)
   end
 
+  def test_create_when_multiple_filenames_cases
+    vp = VP.new
+
+    vp.clean_filename("data", "A.txt")
+    error = assert_raises(RuntimeError) do
+      vp.clean_filename("data", "a.txt")
+    end
+    assert_equal(
+      "Cannot add: data/a.txt. Already exists as: data/A.txt.",
+      error.message
+    )
+  end
+
   def test_data_file_list
     vp = VP.new(vp_path: "testout.vp", root_path: "test_data/data", noop: true)
 
