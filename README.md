@@ -118,8 +118,8 @@ Usage: vp -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_VPS]
 
     Output Column Labels:
 
-        Type      Priority File :: List of Overridden VP[:Shadow File Path]
-    ------------  -------------    -----------------------------------------
+        Type      Priority File :: List of Matching VP[:Shadow File Path] Files
+    ------------  -------------    --------------------------------------------
     [identical]      data/a.txt :: mod1/vp1.vp, mod4/vp4.vp
     [identical]      data/b.txt :: mod1/vp1.vp, mod2/vp2.vp:data/other/b.txt
 
