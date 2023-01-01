@@ -770,7 +770,7 @@ class VP
       entry_data = [
         entry.offset,
         entry.size,
-        entry.name.encode("ascii"),
+        entry.name.encode(Encoding::ASCII_8BIT),
         entry.timestamp,
       ]
       packed_entry = entry_data.pack(ENTRY_TEMPLATE)
@@ -844,7 +844,7 @@ class VP
     end
 
     begin
-      filename.encode("ascii")
+      filename.encode(Encoding::ASCII_8BIT)
     rescue
       raise("Filename not ASCII compatible: #{filename}")
     end
